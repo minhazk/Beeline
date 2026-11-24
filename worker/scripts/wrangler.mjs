@@ -42,12 +42,12 @@ export function deployProblems(config) {
   const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   for (const d of config.d1_databases ?? []) {
     if (!d.database_id || d.database_id === PLACEHOLDER || !uuid.test(d.database_id)) {
-      problems.push("the D1 database_id is a placeholder: run `wrangler d1 create polaris-alerts` and put its id in wrangler.local.jsonc");
+      problems.push("the D1 database_id is a placeholder: run `wrangler d1 create beeline-alerts` and put its id in wrangler.local.jsonc");
     }
   }
   const vars = config.vars ?? {};
   if (vars.APNS_TEAM_ID === "ABCDE12345") problems.push("APNS_TEAM_ID is the example's: put your Apple team ID");
-  if (vars.APNS_TOPIC === "com.example.polaris") problems.push("APNS_TOPIC is the example's: put your app's bundle ID");
+  if (vars.APNS_TOPIC?.startsWith("com.example.")) problems.push("APNS_TOPIC is the example's: put your app's bundle ID");
   const example = /(^|\.)example\.(com|org|net)$/i;
   const routes = [...(config.routes ?? []), ...(config.route ? [config.route] : [])];
   for (const r of routes) {

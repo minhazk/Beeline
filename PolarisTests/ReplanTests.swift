@@ -302,7 +302,7 @@ struct ReplanTests {
         #expect(none.title == "Your route is still the quickest")
         #expect(none.detail == "Nothing gets there sooner from Baker Street than 07:34.")
         #expect(Replan.looking(from: origin) == "Looking for a faster way from Baker Street")
-        #expect(Replan.noSignal(at: origin) == "No signal here. Polaris will look again at Baker Street.")
+        #expect(Replan.noSignal(at: origin) == "No signal here. Beeline Home will look again at Baker Street.")
     }
 
     /// Taking it keeps the legs already done, with their ids (the log points at them), and

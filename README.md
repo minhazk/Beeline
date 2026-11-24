@@ -1,4 +1,7 @@
-# Polaris
+# Beeline Home
+
+Beeline Home is an iOS fork of [Polaris](https://github.com/VDEData/polaris). Its Xcode project,
+scheme and source directories retain their Polaris names. The app’s bundle ID is `com.cloudslope.beeline`.
 
 An iOS app for getting around London (and the rest of Great Britain) that asks several
 journey planners the same question and shows every answer in one ranked list, because
@@ -125,16 +128,16 @@ says how many routes they hid.
 
 ## Build from source
 
-You need a Mac with Xcode 26 or later and [XcodeGen](https://github.com/yonaskolb/XcodeGen)
+You need a Mac with Xcode 27.2 or later and [XcodeGen](https://github.com/yonaskolb/XcodeGen)
 (`brew install xcodegen`). The Xcode project is generated, not committed.
 
 1. Clone the repo and run `scripts/generate.sh`. It copies `Config/Secrets.example.xcconfig`
    to `Config/Secrets.xcconfig` (git-ignored) the first time, then writes `Polaris.xcodeproj`.
    Run it again whenever you add a file.
-2. Open `Polaris.xcodeproj`, pick an iPhone simulator and run. With no keys at all it works:
+2. Open `Polaris.xcodeproj`, select the `Polaris` scheme, pick an iPhone simulator and run. With no keys at all it works:
    TfL (keyless), Transitous and Apple's estimates answer, and Google is shown as needing a key.
 3. For your own iPhone, set in `Config/Secrets.xcconfig`:
-   - `POLARIS_BUNDLE_ID`, a bundle ID of your own (`com.yourname.polaris`); the widget and
+   - `POLARIS_BUNDLE_ID`, if your team needs a different bundle ID (for example, `com.yourname.beeline`); the widget and
      tests add `.widgets` and `.tests`;
    - `DEVELOPMENT_TEAM`, your Apple team ID (developer.apple.com, Membership).
    A free Apple account can install it for a week at a time, but can't sign the push and
@@ -180,13 +183,13 @@ paid Apple Developer Program membership: only that can make the APNs key that le
 send notifications to your build of the app, and sign the app with the push entitlement.
 
 1. `cd worker && pnpm install`, then `pnpm exec wrangler login`.
-2. Create the database: `pnpm exec wrangler d1 create polaris-alerts`. Copy
+2. Create the database: `pnpm exec wrangler d1 create beeline-alerts`. Copy
    `wrangler.local.example.jsonc` to `wrangler.local.jsonc` (git-ignored) and put the printed
    `database_id` in it. `pnpm run deploy` and `pnpm run migrate` lay that file over
    `wrangler.jsonc`, and refuse to run while the id is still the placeholder.
 3. In the same file set `APNS_TEAM_ID` (your team ID) and `APNS_TOPIC` (exactly your
    `POLARIS_BUNDLE_ID`). Add a `routes` entry only if you want your own domain; otherwise the
-   Worker is served at `polaris-alerts.<your-subdomain>.workers.dev`.
+   Worker is served at `beeline-alerts.<your-subdomain>.workers.dev`.
 4. `pnpm run migrate` creates the tables.
 5. Make an APNs key: developer.apple.com, Certificates, Identifiers & Profiles, Keys, a new
    key with Apple Push Notifications service (Sandbox & Production). Download the `.p8` once.
@@ -228,7 +231,7 @@ for localhost only). To use recorded TfL answers instead of TfL, serve them over
 
 ## Being a good client
 
-Every source here is free or has a free tier, run by people who ask for light use. Polaris
+Every source here is free or has a free tier, run by people who ask for light use. Beeline Home
 keeps to these limits, and changes should too:
 
 - **Transitous** (volunteer-run): one request per search, never fanned out into variants.

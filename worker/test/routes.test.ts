@@ -90,7 +90,7 @@ test("a line id can't climb out of TfL's /Line/ path", async () => {
 test("health says whether pushes can go out, and nothing more", async () => {
   const health = async (env: object) => (await worker.fetch(new Request("https://alerts.example.com/health"), { DB: fakeDB(), ...env } as any, {} as ExecutionContext)).json();
   assert.deepEqual(await health({}), { ok: true, pushes: false });
-  assert.deepEqual(await health({ APNS_KEY: "k", APNS_KEY_ID: "K", APNS_TEAM_ID: "T", APNS_TOPIC: "com.example.polaris" }), { ok: true, pushes: true });
+  assert.deepEqual(await health({ APNS_KEY: "k", APNS_KEY_ID: "K", APNS_TEAM_ID: "T", APNS_TOPIC: "com.cloudslope.beeline" }), { ok: true, pushes: true });
 });
 
 test("MAX_DEVICES: unset is 100, 0 takes no new phones, nonsense is 100; a number from wrangler works", async () => {

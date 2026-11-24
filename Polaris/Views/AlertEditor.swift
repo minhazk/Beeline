@@ -127,7 +127,7 @@ struct AlertEditor: View {
             Section {
                 Toggle("Minor delays too", isOn: $alert.minorDelays)
             } footer: {
-                Text("Polaris checks during these times only. Planned works for the next day come the evening before.")
+                Text("Beeline Home checks during these times only. Planned works for the next day come the evening before.")
             }
 
             Section("Name") {

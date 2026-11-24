@@ -434,7 +434,7 @@ extension Replan {
     static func looking(from origin: Origin) -> String { "Looking for a faster way from \(origin.name)" }
 
     /// Asked by hand with no signal: nothing is sent; Go asks again at the next stop.
-    static func noSignal(at origin: Origin) -> String { "No signal here. Polaris will look again at \(origin.name)." }
+    static func noSignal(at origin: Origin) -> String { "No signal here. Beeline Home will look again at \(origin.name)." }
 
     /// Asked by hand and nothing beat the trip as it's going.
     static func nothingBetter(_ timeline: TripTimeline, from origin: Origin) -> Message {

@@ -144,14 +144,14 @@ struct HomeSheet: View {
             }
             Button("Cancel", role: .cancel) { stranded = nil }
         } message: { _ in
-            Text(location.isDenied ? "Location is off for Polaris. Pick where you're starting from instead." : "Pick where you're starting from instead.")
+            Text(location.isDenied ? "Location is off for Beeline Home. Pick where you're starting from instead." : "Pick where you're starting from instead.")
         }
     }
 
     private var header: some View {
         HStack(spacing: 10) {
             FractalStar(size: 26)
-            Text("Polaris").font(Theme.title(.title2))
+            Text("Beeline Home").font(Theme.title(.title2))
             Spacer()
             settingsButton
         }
@@ -343,7 +343,7 @@ struct NearbyList: View {
     var body: some View {
         Group {
             if locationOff {
-                note("Turn on location for Polaris to see what's leaving near you.")
+                note("Turn on location for Beeline Home to see what's leaving near you.")
             } else {
                 switch state {
                 case .loaded(let lines) where lines.isEmpty:

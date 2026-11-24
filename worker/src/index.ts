@@ -1,4 +1,4 @@
-// Polaris alerts: the app registers its push token with the lines you use and when, and
+// Beeline Home alerts: the app registers its push token with the lines you use and when, and
 // asks what TfL says about them now. The checks run on a cron (checks.ts).
 
 import { Hono, type Context } from "hono";
@@ -108,7 +108,7 @@ app.post("/v1/devices/:token/test", async (c) => {
 
 app.onError((error, c) => {
   if (error instanceof valid.Invalid) return c.json({ error: error.message }, 400);
-  if (error instanceof NotOwner) return c.json({ error: "This phone is registered by another install of Polaris" }, 403);
+  if (error instanceof NotOwner) return c.json({ error: "This phone is registered by another install of Beeline Home" }, 403);
   console.error(error);
   return c.json({ error: "Something went wrong" }, 500);
 });

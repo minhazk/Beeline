@@ -20,7 +20,7 @@ enum SetupItem {
         switch self {
         case .google: "Adds Google's routes and fares to every search."
         case .tfl: "TfL answers without one; a key lifts its limit of 50 requests a minute."
-        case .alerts: "Needed for alerts on your lines: a small server of your own watches TfL while Polaris is closed and sends the notifications."
+        case .alerts: "Needed for alerts on your lines: a small server of your own watches TfL while Beeline Home is closed and sends the notifications."
         case .contact: "Transitous is run by volunteers and asks apps to say who to reach about their requests. Blank uses this build's contact, if it has one."
         }
     }
@@ -30,7 +30,7 @@ enum SetupItem {
         switch self {
         case .google: "From console.cloud.google.com: enable the Routes API, then create a key limited to iOS apps and the Routes API, with a daily cap."
         case .tfl: "Free from api-portal.tfl.gov.uk."
-        case .alerts: "Run polaris-alerts on Cloudflare's free plan; the README shows how. Enter its address and APP_TOKEN."
+        case .alerts: "Run beeline-alerts on Cloudflare's free plan; the README shows how. Enter its address and APP_TOKEN."
         case .contact: "Your email address or a web page of yours."
         }
     }

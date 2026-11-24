@@ -145,7 +145,7 @@ private struct LockScreenTrip: View {
                     Text(detail).fontWeight(.medium).foregroundStyle(Palette.ink).minimumScaleFactor(0.85)
                 }
                 HStack(spacing: 6) {
-                    Text(isStale ? "Open Polaris to update" : "Step \(state.step) of \(state.stepCount)")
+                    Text(isStale ? "Open Beeline Home to update" : "Step \(state.step) of \(state.stepCount)")
                     Spacer(minLength: 4)
                     Text("\(destination) at \(state.arrival, format: .dateTime.hour().minute())")
                 }

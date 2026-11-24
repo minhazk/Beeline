@@ -51,7 +51,7 @@ enum ProviderError: LocalizedError, Equatable {
 }
 
 enum HTTP {
-    /// "Polaris/0.1.0 (iOS transit app; <contact>)": the open-data services ask to be able to
+    /// "BeelineHome/0.1 (iOS transit app; <contact>)": the open-data services ask to be able to
     /// reach whoever runs a client. The contact is the one entered in Settings, else
     /// POLARIS_CONTACT from Config/*.xcconfig.
     static var userAgent: String {
@@ -59,7 +59,7 @@ enum HTTP {
         let version = info["CFBundleShortVersionString"] as? String ?? "0"
         let contact = Keychain.get("contact").flatMap(Contact.valid)
             ?? (info["PolarisContact"] as? String).flatMap(Contact.valid) ?? ""
-        return "Polaris/\(version) (iOS transit app\(contact.isEmpty ? "" : "; \(contact)"))"
+        return "BeelineHome/\(version) (iOS transit app\(contact.isEmpty ? "" : "; \(contact)"))"
     }
 
     static func data(for request: URLRequest) async throws -> Data {

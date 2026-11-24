@@ -1,6 +1,6 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "polaris-alerts",
+  "name": "beeline-alerts",
   "main": "src/index.ts",
   "compatibility_date": "2026-10-01",
   "observability": { "enabled": true, "head_sampling_rate": 1 },
@@ -19,8 +19,8 @@
   "d1_databases": [
     {
       "binding": "DB",
-      "database_name": "polaris-alerts",
-      // `wrangler d1 create polaris-alerts` prints the real one: put it in wrangler.local.jsonc.
+      "database_name": "beeline-alerts",
+      // `wrangler d1 create beeline-alerts` prints the real one: put it in wrangler.local.jsonc.
       // Deploying with this placeholder is refused.
       "database_id": "00000000-0000-0000-0000-000000000000"
     }

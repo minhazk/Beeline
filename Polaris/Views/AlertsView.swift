@@ -1,7 +1,7 @@
 import SwiftUI
 @preconcurrency import UserNotifications
 
-/// The lines you use regularly. Polaris's server watches them while you travel and
+/// The lines you use regularly. Beeline Home's server watches them while you travel and
 /// sends a Time Sensitive notification when one closes or is delayed.
 struct AlertsView: View {
     @Environment(AlertStore.self) private var store
@@ -67,14 +67,14 @@ struct AlertsView: View {
                     .opacity(store.isConfigured ? 1 : 0.45)
             } footer: {
                 if !store.isConfigured {
-                    Text("Alerts need a server to watch TfL while Polaris is closed, and this phone isn't set up with one. Enter its address and token in Settings, under Alerts server; the README says how to run your own.")
+                    Text("Alerts need a server to watch TfL while Beeline Home is closed, and this phone isn't set up with one. Enter its address and token in Settings, under Alerts server; the README says how to run your own.")
                 }
             }
 
             if !store.alerts.isEmpty, store.isConfigured { notifications }
 
             Section {
-                Text("Polaris checks TfL every two minutes during the times you set, and tells you once per disruption, again if it gets worse, and when good service is back. Closures and delays are Time Sensitive; minor delays and planned works are ordinary notifications. Planned works for the next day come the evening before, at 7 pm.")
+                Text("Beeline Home checks TfL every two minutes during the times you set, and tells you once per disruption, again if it gets worse, and when good service is back. Closures and delays are Time Sensitive; minor delays and planned works are ordinary notifications. Planned works for the next day come the evening before, at 7 pm.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
@@ -95,7 +95,7 @@ struct AlertsView: View {
         Section {
             switch store.permission?.authorizationStatus {
             case .denied:
-                Button("Notifications are off for Polaris", systemImage: "bell.slash") {
+                Button("Notifications are off for Beeline Home", systemImage: "bell.slash") {
                     openURL(URL(string: UIApplication.openNotificationSettingsURLString)!)
                 }
                 .foregroundStyle(Theme.warning)

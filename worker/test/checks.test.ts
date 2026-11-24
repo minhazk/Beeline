@@ -36,7 +36,7 @@ async function setup(apnsStatus: number | ((n: number) => number) = 200, status:
   const pair = (await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, ["sign"])) as CryptoKeyPair;
   const key = Buffer.from(await crypto.subtle.exportKey("pkcs8", pair.privateKey)).toString("base64");
   const db = fakeDB([{ token: "ab".repeat(32), environment: "sandbox", time_zone: "Europe/London", alerts: JSON.stringify(alerts), state: JSON.stringify({ alerts: {}, planned: {} }) }]);
-  const env = { DB: db, APNS_KEY: key, APNS_KEY_ID: "KEY123", APNS_TEAM_ID: "TEAM123456", APNS_TOPIC: "com.example.polaris" } as unknown as Env;
+  const env = { DB: db, APNS_KEY: key, APNS_KEY_ID: "KEY123", APNS_TEAM_ID: "TEAM123456", APNS_TOPIC: "com.cloudslope.beeline" } as unknown as Env;
   const requests: { url: string; init?: RequestInit }[] = [];
   let pushCount = 0; // pushes asked of APNs so far, however often a test clears `requests`
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -74,7 +74,7 @@ test("in the evening window: today's closure is pushed once, Time Sensitive", as
   const push = requests.find((r) => r.url.includes("push.apple.com"))!;
   assert.equal(push.url, `https://api.sandbox.push.apple.com/3/device/${"ab".repeat(32)}`);
   const headers = push.init!.headers as Record<string, string>;
-  assert.equal(headers["apns-topic"], "com.example.polaris");
+  assert.equal(headers["apns-topic"], "com.cloudslope.beeline");
   assert.equal(headers["apns-collapse-id"], contract().alerts[0].id);
   assert.match(headers.authorization, /^bearer [\w-]+\.[\w-]+\.[\w-]+$/);
   const payload = JSON.parse(push.init!.body as string);
