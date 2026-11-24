@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Shown once, to a new install: Polaris works with nothing set, and each optional key says
+/// Shown once, to a new install: Beeline Home works with nothing set, and each optional key says
 /// what it adds and where to get it. The same sections as Settings, where all of it can change.
 struct SetupView: View {
     @Environment(\.dismiss) private var dismiss
@@ -17,7 +17,7 @@ struct SetupView: View {
                     VStack(alignment: .leading, spacing: 10) {
                         HStack(spacing: 10) {
                             FractalStar(size: 28)
-                            Text("Welcome to Polaris").font(.title2.weight(.semibold)).foregroundStyle(Theme.ink)
+                            Text("Welcome to Beeline Home").font(.title2.weight(.semibold)).foregroundStyle(Theme.ink)
                         }
                         Text("Nothing here is needed to start. Routes from TfL and Transitous, departure boards and Apple's estimates work as they are.")
                         Text("Each item below is optional and adds something. Fill in any you have, or skip.")
@@ -33,7 +33,7 @@ struct SetupView: View {
                     // The one primary action: filled in the chart blue, as Theme's taps are.
                     Button(action: start) {
                         HStack {
-                            Text("Start using Polaris").fontWeight(.semibold)
+                            Text("Start using Beeline Home").fontWeight(.semibold)
                             if serverDraft.working { ProgressView() }
                         }
                         .frame(maxWidth: .infinity)

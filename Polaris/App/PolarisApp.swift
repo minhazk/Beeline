@@ -29,13 +29,6 @@ struct PolarisApp: App {
                 .environment(AlertStore.shared)
                 .tint(Theme.tint)
                 .task { AlertStore.shared.resume() }
-                .onChange(of: settings.appearance, initial: true) { _, appearance in
-                    // On the window rather than preferredColorScheme, so every sheet and the map
-                    // follow, and System hands back to the phone's own setting straight away.
-                    for case let scene as UIWindowScene in UIApplication.shared.connectedScenes {
-                        scene.windows.forEach { $0.overrideUserInterfaceStyle = appearance.style }
-                    }
-                }
         }
     }
 }

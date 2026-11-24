@@ -1,4 +1,4 @@
-// Polaris alerts: the app registers its push token with the lines you use and when, and
+// Beeline Home alerts: the app registers its push token with the lines you use and when, and
 // asks what TfL says about them now. The checks run on a cron (checks.ts).
 
 import { Hono, type Context } from "hono";
@@ -9,35 +9,40 @@ import { loadLineMaps } from "./linemap.ts";
 import { issuesFor, issuesInRanges, linesToPlace } from "./match.ts";
 import { issuesPush, lineList } from "./push.ts";
 import { activeWindows, during, eachWay, travelRanges } from "./schedule.ts";
-import { fetchTfL, lineStatusURL, useLocalTfL, parseLineStatuses, parseStationDisruptions, stationDisruptionsURL } from "./tfl.ts";
+import { useLocalTfL } from "./tfl.ts";
+import { lineCatalog, lineChecks, stationChecks, TfLUnavailable, validateLines } from "./linechecks.ts";
 import type { Alert, Issue } from "./types.ts";
 import * as valid from "./validate.ts";
 
-const app = new Hono<{ Bindings: Env }>();
+type AppEnv = { Bindings: Env; Variables: { enrollmentHash: string } };
+const app = new Hono<AppEnv>();
 
 // Whether pushes can go out, so a missing push setting shows; never which values are set.
 app.get("/health", (c) => c.json({ ok: true, pushes: canPush(c.env) }));
 
 // Nothing is told before the token passes: no version, no setup, no counts.
 app.use("/v1/*", async (c, next) => {
-  const expected = c.env.APP_TOKEN;
-  const given = c.req.header("authorization")?.replace(/^Bearer /, "") ?? "";
-  if (!expected || !(await same(given, expected))) return c.json({ error: "Not allowed" }, 401);
+  const invites = (c.env.APP_TOKEN ?? "").split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  const given = /^Bearer (\S+)$/i.exec(c.req.header("authorization") ?? "")?.[1];
+  if (!given || !invites.length) return c.json({ error: "Not allowed" }, 401);
+  const fingerprint = await digest(given);
+  const invitations = await Promise.all(invites.map(digest));
+  if (!invitations.some((invite) => crypto.subtle.timingSafeEqual(fingerprint, invite))) return c.json({ error: "Not allowed" }, 401);
+  c.set("enrollmentHash", hex(fingerprint));
   await next();
 });
 
 // The largest real registration is a few KB; this stops anyone posting megabytes to parse.
 app.use("/v1/*", bodyLimit({ maxSize: 256 * 1024, onError: (c) => c.json({ error: "Too large" }, 413) }));
 
-/** Each install sends its own secret with its token. The registration that first stores a
- * phone keeps the secret's hash, and only that install can change, test or remove it after.
- * A stored phone without one (none are left) can't be claimed by whoever asks next. */
-async function owner(c: Context<{ Bindings: Env }>, token: string): Promise<{ hash: string; stored: boolean }> {
-  const secret = valid.deviceSecret(c.req.header("x-device-secret"));
-  const hash = await sha256(secret);
-  const row = await c.env.DB.prepare("SELECT secret_hash FROM devices WHERE token = ?1").bind(token).first<{ secret_hash: string | null }>();
-  if (row && (!row.secret_hash || !(await same(row.secret_hash, hash)))) throw new NotOwner();
-  return { hash, stored: Boolean(row) };
+function ownerHash(c: Context<AppEnv>): Promise<string> {
+  return sha256(valid.deviceSecret(c.req.header("x-device-secret")));
+}
+
+/** A guarded operation already failed. This lookup only chooses the error to report. */
+async function rejectOtherOwner(db: D1Database, token: string, hash: string): Promise<void> {
+  const row = await db.prepare("SELECT 1 FROM devices WHERE token = ?1 AND secret_hash IS NOT ?2").bind(token, hash).first();
+  if (row) throw new NotOwner();
 }
 
 class NotOwner extends Error {}
@@ -53,27 +58,47 @@ export function maxDevices(env: Pick<Env, "MAX_DEVICES">): number {
   return 100;
 }
 
+/** The same enrollment has one edge quota even when many addresses use it. */
+async function limitFetches(c: Context<AppEnv>) {
+  if (!c.env.STATUS_LIMITER) throw new TfLUnavailable("The alert server is missing its request limiter.");
+  if (!(await c.env.STATUS_LIMITER.limit({ key: c.get("enrollmentHash") })).success) throw new TooManyRequests();
+}
+class TooManyRequests extends Error {}
+
 app.put("/v1/devices/:token", async (c) => {
   const token = valid.deviceToken(c.req.param("token"));
-  const { hash } = await owner(c, token);
+  const hash = await ownerHash(c);
+  const enrollment = c.get("enrollmentHash");
   const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
   const alerts = valid.alerts(body.alerts);
+  if (!alerts.length) throw new valid.Invalid("A registration needs at least one scheduled alert");
+  await limitFetches(c);
+  validateLines(alerts, await lineCatalog(c.env.TFL_APP_KEY));
   // One statement: a phone already stored is updated; a new one only while there's room, so
   // two registrations at once can't both take the last place.
   const result = await c.env.DB.prepare(
-    `INSERT INTO devices (token, environment, time_zone, alerts, state, updated_at, secret_hash)
-     SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7
+    `INSERT INTO devices (token, environment, time_zone, alerts, state, updated_at, secret_hash, revision, enrollment_hash)
+     SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, lower(hex(randomblob(16))), ?9
      WHERE EXISTS (SELECT 1 FROM devices WHERE token = ?1) OR (SELECT COUNT(*) FROM devices) < ?8
-     ON CONFLICT(token) DO UPDATE SET environment = ?2, time_zone = ?3, alerts = ?4, updated_at = ?6`,
-  ).bind(token, valid.environment(body.environment), valid.timeZone(body.timeZone), JSON.stringify(alerts), JSON.stringify(emptyState()), Date.now(), hash, maxDevices(c.env)).run();
-  if (!result.meta?.changes) return c.json({ error: "This alert server has no room for another phone" }, 503);
+     ON CONFLICT(token) DO UPDATE SET environment = ?2, time_zone = ?3, alerts = ?4, updated_at = ?6, revision = excluded.revision
+     WHERE devices.secret_hash = excluded.secret_hash
+     ON CONFLICT(enrollment_hash) DO NOTHING`,
+  ).bind(token, valid.environment(body.environment), valid.timeZone(body.timeZone), JSON.stringify(alerts), JSON.stringify(emptyState()), Date.now(), hash, maxDevices(c.env), enrollment).run();
+  if (!result.meta?.changes) {
+    await rejectOtherOwner(c.env.DB, token, hash);
+    if (await c.env.DB.prepare("SELECT 1 FROM devices WHERE enrollment_hash = ?1 AND token != ?2").bind(enrollment, token).first()) {
+      return c.json({ error: "This invitation already has a phone. Remove its old registration or use a new invitation." }, 409);
+    }
+    return c.json({ error: "This alert server has no room for another phone" }, 503);
+  }
   return c.json({ ok: true, alerts: alerts.length });
 });
 
 app.delete("/v1/devices/:token", async (c) => {
   const token = valid.deviceToken(c.req.param("token"));
-  await owner(c, token);
-  await c.env.DB.prepare("DELETE FROM devices WHERE token = ?1").bind(token).run();
+  const hash = await ownerHash(c);
+  const result = await c.env.DB.prepare("DELETE FROM devices WHERE token = ?1 AND secret_hash = ?2").bind(token, hash).run();
+  if (!result.meta?.changes) await rejectOtherOwner(c.env.DB, token, hash);
   return c.json({ ok: true });
 });
 
@@ -82,18 +107,24 @@ app.post("/v1/status", async (c) => {
   const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
   const alerts = valid.alerts(body.alerts);
   const timeZone = valid.timeZone(body.timeZone ?? "Europe/London");
+  await limitFetches(c);
   return c.json(await status(c.env, alerts, timeZone, Date.now()));
 });
 
 /** A real notification to this phone: what's wrong now, or what one will look like. */
 app.post("/v1/devices/:token/test", async (c) => {
   const token = valid.deviceToken(c.req.param("token"));
-  await owner(c, token);
-  const row = await c.env.DB.prepare("SELECT environment, time_zone, alerts FROM devices WHERE token = ?1").bind(token).first<{ environment: "sandbox" | "production"; time_zone: string; alerts: string }>();
-  if (!row) return c.json({ error: "This phone isn't registered yet" }, 404);
+  const hash = await ownerHash(c);
+  const row = await c.env.DB.prepare("SELECT environment, time_zone, alerts, revision FROM devices WHERE token = ?1 AND secret_hash = ?2")
+    .bind(token, hash).first<{ environment: "sandbox" | "production"; time_zone: string; alerts: string; revision: string }>();
+  if (!row) {
+    await rejectOtherOwner(c.env.DB, token, hash);
+    return c.json({ error: "This phone isn't registered yet" }, 404);
+  }
   const alerts = JSON.parse(row.alerts) as Alert[];
   if (!alerts.length) return c.json({ error: "No alerts to test" }, 400);
   const now = Date.now();
+  await limitFetches(c);
   // What's wrong now if TfL answers; the point is proving delivery, so not if it doesn't.
   const statuses = await status(c.env, alerts, row.time_zone, now).then((s) => s.alerts, () => []);
   const withIssues = statuses.find((s) => s.issues.length);
@@ -102,13 +133,22 @@ app.post("/v1/devices/:token/test", async (c) => {
     { signature: "test", severity: "delays", line: "", title: "Test: alerts are on", detail: `Good service on ${lineList(alert)} now. A closure or delay will come through like this.` },
   ];
   if (!canPush(c.env)) return c.json({ error: "The alert server has no push key yet, so it can't send notifications." }, 503);
+  const current = await c.env.DB.prepare("SELECT revision FROM devices WHERE token = ?1 AND secret_hash = ?2")
+    .bind(token, hash).first<{ revision: string }>();
+  if (!current) {
+    await rejectOtherOwner(c.env.DB, token, hash);
+    return c.json({ error: "This phone isn't registered yet" }, 404);
+  }
+  if (current.revision !== row.revision) return c.json({ error: "These alerts changed. Try the test again." }, 409);
   const result = await send(c.env, token, row.environment, { ...issuesPush(alert, issues, now), collapseId: `${alert.id}-test` }, now);
   return c.json(result, result.status === 200 ? 200 : 502);
 });
 
 app.onError((error, c) => {
+  if (error instanceof TooManyRequests) return c.json({ error: "Try again in a minute" }, 429, { "Retry-After": "60" });
+  if (error instanceof TfLUnavailable) return c.json({ error: error.message }, 503);
   if (error instanceof valid.Invalid) return c.json({ error: error.message }, 400);
-  if (error instanceof NotOwner) return c.json({ error: "This phone is registered by another install of Polaris" }, 403);
+  if (error instanceof NotOwner) return c.json({ error: "This phone is registered by another install of Beeline Home" }, 403);
   console.error(error);
   return c.json({ error: "Something went wrong" }, 500);
 });
@@ -116,18 +156,20 @@ app.onError((error, c) => {
 async function status(env: Env, alerts: Alert[], timeZone: string, now: number) {
   const segments = alerts.flatMap((a) => a.segments);
   if (!segments.length) return { checkedAt: new Date(now).toISOString(), alerts: alerts.map((a) => ({ id: a.id, issues: [], upcoming: [] })) };
-  const ids = segments.map((s) => s.line.id);
-  const week = alerts.flatMap((a) => travelRanges(a, now, timeZone, 8));
-  // From the start of the hour, so the same request repeats and the edge cache answers it.
+  const catalog = await lineCatalog(env.TFL_APP_KEY);
+  validateLines(alerts, catalog);
+  const hasPlannedTimes = alerts.some((a) => travelRanges(a, now, timeZone, 8).length);
+  // All requests during this hour share the same lookahead, including overnight commutes.
   const hour = Math.floor(now / 3_600_000) * 3_600_000;
-  const [lines, stations, ahead] = await Promise.all([
-    fetchTfL(lineStatusURL(ids), 60, env.TFL_APP_KEY).then(parseLineStatuses),
-    fetchTfL(stationDisruptionsURL(segments.map((s) => s.mode)), 60, env.TFL_APP_KEY).then(parseStationDisruptions),
-    week.length
-      ? fetchTfL(lineStatusURL(ids, { from: hour, to: Math.max(...week.map((r) => r.to)) }), 900, env.TFL_APP_KEY)
-          .then(parseLineStatuses, (error) => (console.error("planned works unavailable", String(error)), []))
-      : Promise.resolve([]),
+  const [current, stops, planned] = await Promise.all([
+    lineChecks(segments, catalog, env.TFL_APP_KEY),
+    stationChecks(segments, env.TFL_APP_KEY),
+    hasPlannedTimes ? lineChecks(segments, catalog, env.TFL_APP_KEY, { from: hour, to: hour + 9 * 86400_000 }) : undefined,
   ]);
+  if (current.missing.size || stops.missing.size || planned?.missing.size) {
+    throw new TfLUnavailable("TfL could not check every line. Try again later.");
+  }
+  const lines = current.lines, stations = stops.stations, ahead = planned?.lines ?? [];
   const ways = alerts.flatMap(eachWay);
   const maps = await loadLineMaps([...new Set([...linesToPlace(ways, lines, stations), ...linesToPlace(ways, ahead, stations)])], env.TFL_APP_KEY);
   const shown = (issues: Issue[]) => issues.map(({ severity, title, detail, from }) => ({ severity, title, detail, from: from && new Date(from).toISOString() }));
@@ -144,14 +186,16 @@ async function status(env: Env, alerts: Alert[], timeZone: string, now: number) 
   };
 }
 
-async function sha256(text: string): Promise<string> {
-  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
-  return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
+function digest(text: string): Promise<ArrayBuffer> {
+  return crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
 }
 
-async function same(a: string, b: string): Promise<boolean> {
-  const [x, y] = await Promise.all([a, b].map((s) => crypto.subtle.digest("SHA-256", new TextEncoder().encode(s))));
-  return crypto.subtle.timingSafeEqual(x, y);
+function hex(bytes: ArrayBuffer): string {
+  return [...new Uint8Array(bytes)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+async function sha256(text: string): Promise<string> {
+  return hex(await digest(text));
 }
 
 export default {

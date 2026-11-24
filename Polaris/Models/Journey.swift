@@ -196,6 +196,15 @@ struct ServiceNotice: Codable, Hashable, Sendable {
         static func < (a: Self, b: Self) -> Bool { a.rawValue < b.rawValue }
     }
 
+    /// The same operator notice can apply to several legs or alternatives.
+    struct DisplayID: Hashable {
+        let title: String
+        let detail: String
+        let severity: Severity
+        let source: ProviderID
+    }
+    var displayID: DisplayID { DisplayID(title: title, detail: detail, severity: severity, source: source) }
+
     /// "Canary Wharf part closed (Elizabeth line)", "Minor delays on the Jubilee".
     var title: String
     /// The operator's own words.

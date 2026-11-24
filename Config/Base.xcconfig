@@ -5,13 +5,13 @@
 // The app's bundle ID; the widget and tests add ".widgets" and ".tests". The Keychain items,
 // the log subsystem and the Google key's iOS restriction all follow it, and an alerts server's
 // APNS_TOPIC must equal it.
-POLARIS_BUNDLE_ID = com.example.polaris
+POLARIS_BUNDLE_ID = com.cloudslope.beeline
 // Your Apple team ID (developer.apple.com, Membership). Empty is fine for the simulator.
 DEVELOPMENT_TEAM =
 
-// How Polaris identifies itself to the open-data services (User-Agent): a URL or address
+// How Beeline Home identifies itself to the open-data services (User-Agent): a URL or address
 // where whoever runs them can reach the person running this build. Empty sends none.
-POLARIS_CONTACT =
+POLARIS_CONTACT = https:/$()/github.com/minhazk/beeline
 
 // The alerts server (worker/) and its APP_TOKEN. Both empty: alerts are off until an
 // address and token are entered in Settings.

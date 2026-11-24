@@ -21,6 +21,24 @@ struct JourneyRankerTests {
 
     func order(_ ranked: JourneyRanker.Ranked) -> [String] { ranked.top.map(\.journey.routeSignature) }
 
+    @Test func routesThroughClosuresStillHaveAResultAndMapWithoutALeadingRecommendation() {
+        var route = journey(["Jubilee"], arrives: 27)
+        let notice = ServiceNotice(title: "Station closed", detail: "Canary Wharf", severity: .closed,
+                                   source: .tfl, leg: route.legs[1].id)
+        route.notices = [notice]
+        let ranked = JourneyRanker.rank([route], arriveBy: false)
+        #expect(ranked.onlyBlockedRoutes && ranked.top.isEmpty)
+        #expect(ranked.mapJourneys == [route])
+        #expect(!JourneyRanker.rank([], arriveBy: false).onlyBlockedRoutes)
+
+        var another = notice
+        another.detail = "London Bridge"
+        #expect(another.displayID != notice.displayID)
+        another = notice
+        another.leg = UUID()
+        #expect(another.displayID == notice.displayID)
+    }
+
     @Test func shelvesRoutesBeatenOnEverything() {
         let fast = journey(["Hammersmith & City", "Elizabeth"], arrives: 30)
         let slow = journey(["Northern", "DLR"], arrives: 39)

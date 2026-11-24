@@ -1,5 +1,5 @@
 {
-  "name": "polaris-alerts",
+  "name": "beeline-alerts",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -9,8 +9,8 @@
     "config": "node scripts/wrangler.mjs --print",
     "typecheck": "tsc --noEmit",
     "test": "node --test 'test/**/*.test.ts'",
-    "migrate": "node scripts/wrangler.mjs d1 migrations apply polaris-alerts --remote",
-    "migrate:local": "node scripts/wrangler.mjs d1 migrations apply polaris-alerts --local"
+    "migrate": "node scripts/wrangler.mjs d1 migrations apply DB --remote",
+    "migrate:local": "node scripts/wrangler.mjs d1 migrations apply DB --local"
   },
   "dependencies": {
     "hono": "4.12.30"

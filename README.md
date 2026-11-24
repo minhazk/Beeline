@@ -1,4 +1,7 @@
-# Polaris
+# Beeline Home
+
+Beeline Home is an iOS fork of [Polaris](https://github.com/VDEData/polaris). Its Xcode project,
+scheme and source directories retain their Polaris names. The app’s bundle ID is `com.cloudslope.beeline`.
 
 An iOS app for getting around London (and the rest of Great Britain) that asks several
 journey planners the same question and shows every answer in one ranked list, because
@@ -125,25 +128,26 @@ says how many routes they hid.
 
 ## Build from source
 
-You need a Mac with Xcode 26 or later and [XcodeGen](https://github.com/yonaskolb/XcodeGen)
-(`brew install xcodegen`). The Xcode project is generated, not committed.
+The app runs on iOS 26 and later. Build with Xcode 27.2 and [XcodeGen](https://github.com/yonaskolb/XcodeGen)
+(`brew install xcodegen`) on a Mac. The source includes iOS 27.1 fold-aware layout APIs
+behind availability checks. Generate the Xcode project from the checked-in project specification.
 
 1. Clone the repo and run `scripts/generate.sh`. It copies `Config/Secrets.example.xcconfig`
    to `Config/Secrets.xcconfig` (git-ignored) the first time, then writes `Polaris.xcodeproj`.
    Run it again whenever you add a file.
-2. Open `Polaris.xcodeproj`, pick an iPhone simulator and run. With no keys at all it works:
+2. Open `Polaris.xcodeproj`, select the `Polaris` scheme, pick an iPhone simulator and run. With no keys at all it works:
    TfL (keyless), Transitous and Apple's estimates answer, and Google is shown as needing a key.
 3. For your own iPhone, set in `Config/Secrets.xcconfig`:
-   - `POLARIS_BUNDLE_ID`, a bundle ID of your own (`com.yourname.polaris`); the widget and
+   - `POLARIS_BUNDLE_ID`, if your team needs a different bundle ID (for example, `com.yourname.beeline`); the widget and
      tests add `.widgets` and `.tests`;
    - `DEVELOPMENT_TEAM`, your Apple team ID (developer.apple.com, Membership).
    A free Apple account can install it for a week at a time, but can't sign the push and
    Time Sensitive entitlements alerts need; for those you need the paid Apple Developer Program.
    If signing complains about them on a free account, delete those two keys from
    `Polaris/Resources/Polaris.entitlements` in your copy.
-4. Set `POLARIS_CONTACT` to a URL or address where you can be reached: it goes in the
-   User-Agent sent to TfL and Transitous, who ask clients to identify themselves. It is empty
-   by default (the User-Agent is then just the app's name and version), so please set one.
+4. TfL and Transitous requests identify Beeline Home with its public repository URL. Set
+   `POLARIS_CONTACT` to change that build-time contact. A personal contact entered in Settings
+   is sent only to Transitous.
 
 `Config/Base.xcconfig` holds the defaults and includes your `Secrets.xcconfig` last, so
 anything you set there wins. In an xcconfig `//` starts a comment: write URLs as
@@ -166,7 +170,7 @@ anything in the xcconfig is compiled into the app, where anyone with the `.ipa` 
 | `GOOGLE_ROUTES_API_KEY` | [Google Cloud console](https://console.cloud.google.com): enable **Routes API**, create an API key restricted to iOS apps with your bundle ID and to the Routes API only | No Google routes |
 | `TFL_APP_KEY` | [TfL API portal](https://api-portal.tfl.gov.uk): subscribe, copy the primary key | TfL still answers, at 50 requests a minute |
 | `POLARIS_ALERTS_URL`, `POLARIS_ALERTS_TOKEN` | Your own alerts server, below | Alerts are off |
-| `POLARIS_CONTACT` | A URL or email of yours; also settable per phone in Settings | No contact in the User-Agent |
+| `POLARIS_CONTACT` | A public contact for the build's open-data requests | Uses the Beeline repository URL by default |
 
 ## Run your own alerts server
 
@@ -180,20 +184,20 @@ paid Apple Developer Program membership: only that can make the APNs key that le
 send notifications to your build of the app, and sign the app with the push entitlement.
 
 1. `cd worker && pnpm install`, then `pnpm exec wrangler login`.
-2. Create the database: `pnpm exec wrangler d1 create polaris-alerts`. Copy
+2. Create the database: `pnpm exec wrangler d1 create beeline-alerts`. Copy
    `wrangler.local.example.jsonc` to `wrangler.local.jsonc` (git-ignored) and put the printed
    `database_id` in it. `pnpm run deploy` and `pnpm run migrate` lay that file over
    `wrangler.jsonc`, and refuse to run while the id is still the placeholder.
 3. In the same file set `APNS_TEAM_ID` (your team ID) and `APNS_TOPIC` (exactly your
    `POLARIS_BUNDLE_ID`). Add a `routes` entry only if you want your own domain; otherwise the
-   Worker is served at `polaris-alerts.<your-subdomain>.workers.dev`.
+   Worker is served at `beeline-alerts.<your-subdomain>.workers.dev`.
 4. `pnpm run migrate` creates the tables.
 5. Make an APNs key: developer.apple.com, Certificates, Identifiers & Profiles, Keys, a new
    key with Apple Push Notifications service (Sandbox & Production). Download the `.p8` once.
 6. Set the secrets:
    ```sh
-   openssl rand -hex 32                                              # copy this: it's APP_TOKEN, for the app too
-   pnpm exec wrangler secret put APP_TOKEN                           # paste it
+   openssl rand -hex 32                                              # generate one invitation for each phone
+   pnpm exec wrangler secret put APP_TOKEN                           # one invitation per line
    pnpm exec wrangler secret put APNS_KEY < AuthKey_ABC123DEFG.p8    # the whole key file, read from stdin
    pnpm exec wrangler secret put APNS_KEY_ID                         # the key's 10-character ID
    pnpm exec wrangler secret put TFL_APP_KEY                         # optional
@@ -201,13 +205,12 @@ send notifications to your build of the app, and sign the app with the push enti
 7. `pnpm run deploy`. Check `https://<your worker>/health` says `{"ok":true,"pushes":true}`;
    `"pushes":false` means one of `APNS_KEY`, `APNS_KEY_ID`, `APNS_TEAM_ID` or `APNS_TOPIC` is
    missing, and until it's set the cron judges nothing, so no disruption is lost.
-8. Point the app at it: in Settings, Alerts server, enter the address and the `APP_TOKEN`
-   and tap Use this server. Or build it in with `POLARIS_ALERTS_URL` and
-   `POLARIS_ALERTS_TOKEN` in `Config/Secrets.xcconfig`. Then Alerts, Add a line, and
-   Send a test notification.
+8. In Settings, open Alerts server, enter the server address and **that phone’s invitation**,
+   then tap Use this server. In Alerts, add a line and choose Send a test notification.
 
-The server only accepts requests with its `APP_TOKEN`, and each install sends its own random
-secret, so only the install that registered a phone can change, test or remove it.
+Each invitation admits one new phone at a time. Existing installations from earlier versions
+retain their registrations. Each install also sends a random device secret so only its owner can
+change, test or remove the registration. Run the database migrations before updating the Worker.
 `MAX_DEVICES` (a var, default 100; `0` takes no new phones) caps how many phones it keeps.
 
 Nothing changes until you tap Use this server (or finish the setup step with an address and
@@ -215,8 +218,10 @@ token filled in); leaving Settings with a half-typed server keeps the one in use
 server first removes this phone from the old server, using the old server's own token and
 secret, then registers your saved alerts with the new one. Each server
 gets its own device secret and the token entered with it, never the built-in one, so nothing
-of one server's is sent to another. If the old server can't be reached, Settings says so: it
-may keep pushing until you take it down or delete the phone's row.
+of one server's is sent to another. If the former server is unreachable, Settings reports the failure
+and the phone retries the removal on a later launch.
+
+The alerts worker checks line and mode selections against TfL's rail catalog. Each enrollment can request up to 12 registrations, status refreshes or notification tests per minute at a Cloudflare location. The scheduler uses separate batches for each mode and retries incomplete results at the next check.
 
 Development: `pnpm test` runs offline against the recorded TfL responses in
 `PolarisTests/Fixtures`, which the app's tests share (`alert-contract.json` is the JSON the
@@ -228,7 +233,7 @@ for localhost only). To use recorded TfL answers instead of TfL, serve them over
 
 ## Being a good client
 
-Every source here is free or has a free tier, run by people who ask for light use. Polaris
+Every source here is free or has a free tier, run by people who ask for light use. Beeline Home
 keeps to these limits, and changes should too:
 
 - **Transitous** (volunteer-run): one request per search, never fanned out into variants.
@@ -252,13 +257,10 @@ keeps to these limits, and changes should too:
   header anyone can copy. Prefer entering it in Settings, restrict it to the Routes API,
   cap its daily quota and set a billing budget alert. For a wider audience, put it behind a
   small proxy instead.
-- The alerts server's `APP_TOKEN` is a password for your deployment, shared by everyone you
-  give a build or the token to; it is not per-person sign-in. Whoever has it can register
-  phones (up to `MAX_DEVICES`) and ask for status, which makes the Worker ask TfL and fetch line
-  orders, though they can't change or remove another install's phone (that takes the install's
-  own secret). Status isn't tied to a registered phone because the app asks for it before a
-  phone has registered (or when notifications are off). Give the token only to people you
-  trust, and change it (`wrangler secret put APP_TOKEN`, then in the app) if it gets out.
+- `APP_TOKEN` holds one random invitation per line. Distribute each invitation privately to one
+  phone. A recipient can request status before enabling push and admit one new registration.
+  To replace an invitation, update the Worker secret and the affected phone. Credentials
+  compiled into a distributed IPA are readable by its recipients, so enter invitations in Settings.
 - Keys and tokens entered in the app stay in the Keychain on that phone and go only to their
   own service. Alert requests refuse redirects and plain http (except localhost).
 - Report a security problem through the repository's private vulnerability reporting
@@ -290,7 +292,7 @@ MIT. See `LICENSE`.
 - `Polaris/Shared` and `PolarisWidgets`: the trip's Live Activity (the attributes are compiled into both targets).
 - `worker/`: the alerts server: `match.ts` (which disruptions touch your stretch), `policy.ts` (when to tell you), `checks.ts` (the cron), `apns.ts`.
 - `PolarisTests`: parsers against recorded Google/TfL/Transitous responses, boards, walking progress and leg-by-leg tracking, and the merge and ranking rules.
-- `Polaris/Design/Theme.swift`: the star-atlas palette, light and dark (System, Light or Dark in Settings).
+- `Polaris/Design/Theme.swift` defines the map and journey colours. The app and its trip Live Activity always use a dark appearance.
 
 Launch flags for checking screens without tapping (Debug only): `-setup` shows the first-run setup step; `-demo -demoReplan
 offer|wait|early` opens Go on a canned trip early onto the Bakerloo, with canned boards

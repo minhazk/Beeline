@@ -17,9 +17,5 @@ xcuserdata/
 # --- local review material ---
 screenshots/
 
-# --- maintainer notes and design history: kept locally, not in the repo ---
-/CLAUDE.md
-/AGENTS.md
-/design/
-/docs/
+# Local Claude Code state
 /.claude/

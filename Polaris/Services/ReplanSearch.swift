@@ -36,7 +36,11 @@ enum ReplanSearch {
             async let network: NetworkStatus? = checksNetwork ? SearchModel.networkStatus(appKey: tflKey) : nil
             let results = await withTaskGroup(of: [Journey]?.self) { group in
                 for provider in providers {
-                    group.addTask { try? await provider.journeys(for: query, deep: false) }
+                    group.addTask {
+                        do { return try await provider.journeys(for: query, deep: false) }
+                        catch ProviderError.noRoutes { return [] }
+                        catch { return nil }
+                    }
                 }
                 var all: [[Journey]?] = []
                 for await result in group { all.append(result) }

@@ -1,3 +1,4 @@
+import { inGroups } from "./linechecks.ts";
 // A line's stations in order, branches and all, from TfL's Line/{id}/Route/Sequence/all: enough
 // to place the stations TfL names in its notices ("between Paddington and Heathrow Terminals")
 // and to tell which way "westbound" or "towards Heathrow" is for a stretch you ride.
@@ -182,7 +183,7 @@ const failed = new Map<string, number>();
 /** The maps for these lines. One that can't be had is left out, and its trouble counts as now. */
 export async function loadLineMaps(ids: string[], appKey?: string, now = Date.now()): Promise<Map<string, LineMap>> {
   const maps = new Map<string, LineMap>();
-  await Promise.all([...new Set(ids)].map(async (id) => {
+  await inGroups([...new Set(ids)], async (id) => {
     const kept = held.get(id);
     if (kept && now - kept.at < 6 * 3600_000) return void maps.set(id, kept.map);
     if (now - (failed.get(id) ?? -Infinity) < 10 * 60_000) return;
@@ -196,7 +197,7 @@ export async function loadLineMaps(ids: string[], appKey?: string, now = Date.no
       failed.set(id, now);
       console.error("line order unavailable", id, String(error));
     }
-  }));
+  });
   return maps;
 }
 

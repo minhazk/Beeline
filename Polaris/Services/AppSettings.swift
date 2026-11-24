@@ -25,11 +25,6 @@ final class AppSettings {
         didSet { defaults.set(try? JSONEncoder().encode(routeFilter), forKey: "routeFilter") }
     }
 
-    /// Light, dark, or whatever the phone is set to.
-    var appearance: Appearance {
-        didSet { defaults.set(appearance.rawValue, forKey: "appearance") }
-    }
-
     /// Keys pasted in Settings live in the Keychain and beat the build-time ones.
     /// Written only when changed here, never while being read in (`loading`).
     var googleKeyOverride: String { didSet { if !loading { Keychain.set(googleKeyOverride, for: "google") } } }
@@ -43,7 +38,6 @@ final class AppSettings {
         deepSearch = defaults.object(forKey: "deepSearch") as? Bool ?? true
         sortOrder = defaults.string(forKey: "sortOrder").flatMap(SortOrder.init) ?? .best
         routeFilter = defaults.data(forKey: "routeFilter").flatMap { try? JSONDecoder().decode(RouteFilter.self, from: $0) } ?? RouteFilter()
-        appearance = defaults.string(forKey: "appearance").flatMap(Appearance.init) ?? .system
         googleKeyOverride = ""
         tflKeyOverride = ""
         contactOverride = ""
@@ -110,28 +104,6 @@ enum Contact {
     }
 }
 
-enum Appearance: String, CaseIterable, Identifiable {
-    case system, light, dark
-
-    var id: Self { self }
-
-    var label: String {
-        switch self {
-        case .system: "System"
-        case .light: "Light"
-        case .dark: "Dark"
-        }
-    }
-
-    var style: UIUserInterfaceStyle {
-        switch self {
-        case .system: .unspecified
-        case .light: .light
-        case .dark: .dark
-        }
-    }
-}
-
 /// What a Keychain read found. "Unreadable" (the phone locked since it started, say) is not
 /// "not there": callers wait rather than fall back to something else or make a new value.
 enum KeychainRead: Equatable, Sendable {
@@ -189,12 +161,18 @@ enum Keychain {
             kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service,
             kSecAttrAccount as String: account,
         ]
-        let deleted = SecItemDelete(query as CFDictionary)
-        guard !value.isEmpty else { return deleted == errSecSuccess || deleted == errSecItemNotFound }
-        var item = query
-        item[kSecValueData as String] = Data(value.utf8)
-        item[kSecAttrAccessible as String] = accessible
-        return SecItemAdd(item as CFDictionary, nil) == errSecSuccess
+        if value.isEmpty {
+            let deleted = SecItemDelete(query as CFDictionary)
+            return deleted == errSecSuccess || deleted == errSecItemNotFound
+        }
+        let attributes: [String: Any] = [kSecValueData as String: Data(value.utf8), kSecAttrAccessible as String: accessible]
+        switch SecItemUpdate(query as CFDictionary, attributes as CFDictionary) {
+        case errSecSuccess: return true
+        case errSecItemNotFound:
+            let item = query.merging(attributes) { _, new in new }
+            return SecItemAdd(item as CFDictionary, nil) == errSecSuccess
+        default: return false
+        }
     }
 
     /// Items saved by earlier builds had the default (readable only while unlocked): moved to

@@ -1,6 +1,6 @@
 // Apple Push Notifications over HTTP/2, signed with a .p8 key (ES256 JWT).
 // APNs refuses a new provider token more often than every 20 minutes, so the token
-// lives in D1 for 50 minutes rather than in one isolate's memory.
+// is shared across isolates for 50 minutes. D1 stores only an encrypted copy.
 
 import type { Environment } from "./types.ts";
 import type { Push } from "./push.ts";
@@ -29,16 +29,24 @@ const HOSTS: Record<Environment, string> = {
   production: "https://api.push.apple.com",
 };
 
+async function collapseHeader(id: string): Promise<string> {
+  const bytes = new TextEncoder().encode(id);
+  if (bytes.length <= 64) return id;
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
 export async function send(env: ApnsEnv, token: string, environment: Environment, push: Push, now = Date.now()): Promise<Sent> {
-  const jwt = await providerToken(env, now);
+  const { jwt, sealed } = await providerToken(env, now);
   const response = await fetch(`${HOSTS[environment]}/3/device/${token}`, {
     method: "POST",
+    redirect: "error",
     headers: {
       authorization: `bearer ${jwt}`,
       "apns-topic": String(env.APNS_TOPIC),
       "apns-push-type": "alert",
       "apns-priority": String(push.priority),
-      "apns-collapse-id": push.collapseId,
+      "apns-collapse-id": await collapseHeader(push.collapseId),
       "apns-expiration": String(push.expiration),
       "content-type": "application/json",
     },
@@ -46,24 +54,55 @@ export async function send(env: ApnsEnv, token: string, environment: Environment
   });
   if (response.ok) return { status: response.status, gone: false };
   const reason = ((await response.json().catch(() => ({}))) as { reason?: string }).reason;
-  if (reason === "ExpiredProviderToken" || reason === "InvalidProviderToken") await env.DB.prepare("DELETE FROM meta WHERE key = 'apns_jwt'").run();
-  const gone = response.status === 410 || reason === "BadDeviceToken" || reason === "DeviceTokenNotForTopic";
+  if (reason === "ExpiredProviderToken" || reason === "InvalidProviderToken") {
+    await env.DB.prepare("DELETE FROM meta WHERE key = 'apns_jwt' AND value = ?1").bind(sealed).run();
+  }
+  const gone = response.status === 410 && reason === "Unregistered";
   return { status: response.status, reason, gone };
 }
 
-async function providerToken(env: ApnsEnv, now: number): Promise<string> {
+async function providerToken(env: ApnsEnv, now: number): Promise<{ jwt: string; sealed: string }> {
   if (!env.APNS_KEY || !env.APNS_KEY_ID || !env.APNS_TEAM_ID || !env.APNS_TOPIC) throw new Error("APNs key, key ID, team or topic not set");
+  const privateKey = decodePEM(env.APNS_KEY);
+  const material = await crypto.subtle.importKey("raw", privateKey, "HKDF", false, ["deriveKey"]);
+  const encoder = new TextEncoder();
+  const key = await crypto.subtle.deriveKey(
+    { name: "HKDF", hash: "SHA-256", salt: encoder.encode("Beeline APNs token cache v1"),
+      info: encoder.encode(JSON.stringify([String(env.APNS_TEAM_ID), String(env.APNS_KEY_ID), String(env.APNS_TOPIC)])) },
+    material, { name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"],
+  );
   const cached = await env.DB.prepare("SELECT value, updated_at FROM meta WHERE key = 'apns_jwt'").first<{ value: string; updated_at: number }>();
-  if (cached && now - cached.updated_at < 50 * 60_000) return cached.value;
+  if (cached?.value.startsWith("v1:") && cached.updated_at <= now && now - cached.updated_at < 50 * 60_000) {
+    try {
+      const bytes = fromBase64(cached.value.slice(3));
+      const plaintext = await crypto.subtle.decrypt({ name: "AES-GCM", iv: bytes.subarray(0, 12),
+        additionalData: encoder.encode(String(cached.updated_at)) }, key, bytes.subarray(12));
+      return { jwt: new TextDecoder().decode(plaintext), sealed: cached.value };
+    } catch {
+      // A rotated signing key or an unreadable entry requires a new provider token.
+    }
+  }
   // An all-digit team ID or key ID written unquoted in wrangler's vars arrives as a number.
   const jwt = await sign(String(env.APNS_KEY), String(env.APNS_KEY_ID), String(env.APNS_TEAM_ID), now);
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const ciphertext = await crypto.subtle.encrypt({ name: "AES-GCM", iv, additionalData: encoder.encode(String(now)) },
+    key, encoder.encode(jwt));
+  const sealed = "v1:" + btoa(String.fromCharCode(...iv, ...new Uint8Array(ciphertext)));
   await env.DB.prepare("INSERT INTO meta (key, value, updated_at) VALUES ('apns_jwt', ?1, ?2) ON CONFLICT(key) DO UPDATE SET value = ?1, updated_at = ?2")
-    .bind(jwt, now).run();
-  return jwt;
+    .bind(sealed, now).run();
+  return { jwt, sealed };
+}
+
+function fromBase64(value: string) {
+  return Uint8Array.from(atob(value), (character) => character.charCodeAt(0));
+}
+
+function decodePEM(key: string) {
+  return fromBase64(key.replace(/-----[^-]+-----|\s/g, ""));
 }
 
 export async function sign(p8: string, keyId: string, teamId: string, now: number): Promise<string> {
-  const der = Uint8Array.from(atob(p8.replace(/-----[^-]+-----|\s/g, "")), (c) => c.charCodeAt(0));
+  const der = decodePEM(p8);
   const key = await crypto.subtle.importKey("pkcs8", der, { name: "ECDSA", namedCurve: "P-256" }, false, ["sign"]);
   const encode = (value: object) => base64url(new TextEncoder().encode(JSON.stringify(value)));
   const unsigned = `${encode({ alg: "ES256", kid: keyId })}.${encode({ iss: teamId, iat: Math.floor(now / 1000) })}`;

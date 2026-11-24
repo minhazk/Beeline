@@ -26,7 +26,7 @@ enum FirstRun {
         "places.home", "places.work", "places.recents", "alerts", "alerts.registered", "alerts.token",
         "googleAllowance", "disabledProviders", "deepSearch", "sortOrder", "routeFilter", "appearance", "wholeMap",
     ]
-    static let keychainAccounts = ["google", "tfl", "contact", "alerts.server.url"]
+    static let keychainAccounts = ["google", "tfl", "contact", "alerts.server.choice", "alerts.server.url"]
 
     static func facts(defaults: UserDefaults = .standard, keychain: (String) -> KeychainRead = Keychain.read) -> Facts {
         let reads = keychainAccounts.map(keychain)

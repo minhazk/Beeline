@@ -14,6 +14,11 @@ struct FirstRunTests {
 
     private let empty: (String) -> KeychainRead = { _ in .notFound }
 
+    @Test func appDeclaresDarkAppearanceFromLaunch() {
+        let app = Bundle(for: AppDelegate.self)
+        #expect(app.object(forInfoDictionaryKey: "UIUserInterfaceStyle") as? String == "Dark")
+    }
+
     @Test func aNewInstallSeesItOnce() {
         let d = defaults()
         #expect(FirstRun.takeTurn(defaults: d, keychain: empty))
@@ -26,6 +31,7 @@ struct FirstRunTests {
             ("a saved place", { PlaceStore(defaults: $0).home = Place(name: "King's Cross", coordinate: .init(latitude: 51.53, longitude: -0.12)) }),
             ("a recent place", { PlaceStore(defaults: $0).remember(Place(name: "Bank", coordinate: .init(latitude: 51.51, longitude: -0.09))) }),
             ("a setting", { AppSettings(defaults: $0).deepSearch = false }),
+            ("a legacy appearance choice", { $0.set("light", forKey: "appearance") }),
             ("a sort order", { AppSettings(defaults: $0).sortOrder = .fastest }),
             ("Google's count", { GoogleUsage(defaults: $0).spend(1) }),
             ("an alert", { d in
@@ -33,7 +39,7 @@ struct FirstRunTests {
                 deps.defaults = d
                 deps.secrets = AlertStoreTests.Secrets()
                 deps.builtInURL = nil
-                AlertStore(deps).save(RouteAlert())
+                AlertStore(deps).save(AlertStoreTests.validAlert())
             }),
         ]
         for (what, use) in uses {

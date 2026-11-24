@@ -61,7 +61,7 @@ function window(v: unknown): TimeWindow {
 }
 
 export function alerts(v: unknown): Alert[] {
-  return list(v, 30, "alerts", (x) => {
+  const result = list(v, 30, "alerts", (x): Alert => {
     const a = (x ?? {}) as Record<string, unknown>;
     const days = list(a.days, 7, "days", (d) => {
       if (!Number.isInteger(d) || (d as number) < 1 || (d as number) > 7) throw new Invalid("days are 1 (Monday) to 7");
@@ -78,6 +78,9 @@ export function alerts(v: unknown): Alert[] {
       direction: a.direction === "out" || a.direction === "back" ? a.direction : "both",
     };
   });
+  if (result.some((a) => !a.segments.length || !a.days.length || !a.windows.length)) throw new Invalid("Each alert needs a line and scheduled travel times");
+  if (new Set(result.flatMap((a) => a.segments.map((s) => s.line.id))).size > 48) throw new Invalid("An install can watch up to 48 distinct lines");
+  return result;
 }
 
 export function environment(v: unknown): Environment {

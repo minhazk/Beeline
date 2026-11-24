@@ -85,4 +85,10 @@ struct NearbyLine: Identifiable, Hashable, Sendable {
     var departures: [Departure]
 
     var id: String { "\(line)|\(headsign)" }
+
+    func upcoming(at date: Date) -> NearbyLine? {
+        var line = self
+        line.departures = departures.filter { !$0.isCancelled && $0.expected >= date }
+        return line.departures.isEmpty ? nil : line
+    }
 }

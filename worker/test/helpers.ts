@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import type { Alert, Segment } from "../src/types.ts";
 
@@ -26,7 +26,7 @@ export function sqliteD1() {
   // Node's own SQLite; required here so the Worker's types never see it.
   const { DatabaseSync } = (globalThis as any).process.getBuiltinModule("node:sqlite");
   const db = new DatabaseSync(":memory:");
-  for (const name of ["0001_devices.sql", "0002_device_secret.sql"]) {
+  for (const name of readdirSync(new URL("../migrations/", import.meta.url)).filter((name) => /^\d+_.*\.sql$/.test(name)).sort()) {
     db.exec(readFileSync(fileURLToPath(new URL(`../migrations/${name}`, import.meta.url)), "utf8"));
   }
   const statement = (sql: string) => {

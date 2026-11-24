@@ -137,6 +137,7 @@ final class SearchModel {
             appleEstimate = estimate
             statuses[.apple] = .done(1)
         } catch {
+            guard !Task.isCancelled else { return }
             statuses[.apple] = .failed(Self.describe(error))
         }
     }

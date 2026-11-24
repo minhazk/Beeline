@@ -1,13 +1,13 @@
 // Copy to wrangler.local.jsonc (git-ignored) and fill in your own deployment. Each key here
 // replaces the same key in wrangler.jsonc ("vars" is merged key by key).
 {
-  // Optional: serve on your own domain instead of polaris-alerts.<you>.workers.dev.
+  // Optional: serve on your own domain instead of beeline-alerts.<you>.workers.dev.
   // "routes": [{ "pattern": "alerts.example.com", "custom_domain": true }],
   "vars": {
     "APNS_TEAM_ID": "ABCDE12345",
-    "APNS_TOPIC": "com.example.polaris"
+    "APNS_TOPIC": "com.example.your-app"
   },
   "d1_databases": [
-    { "binding": "DB", "database_name": "polaris-alerts", "database_id": "<from wrangler d1 create>" }
+    { "binding": "DB", "database_name": "beeline-alerts", "database_id": "<from wrangler d1 create>" }
   ]
 }

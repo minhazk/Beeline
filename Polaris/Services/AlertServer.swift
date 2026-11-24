@@ -4,22 +4,24 @@ import Foundation
 /// Where alerts are kept and checked (worker/): an address and the token that server expects.
 /// The one built in at build time, or one entered in Settings. They go as a pair: a token is
 /// only ever sent to the address it was given with.
-struct AlertServer: Equatable, Sendable {
+struct AlertServer: Codable, Equatable, Sendable {
     var url: URL
     var token: String
     /// Built in from Config/*.xcconfig rather than entered in Settings.
     var isBuiltIn: Bool
 
     enum Problem: Error, Equatable {
-        case notAnAddress, notHTTPS, hasCredentials, noToken, keychainLocked
+        case notAnAddress, notHTTPS, hasCredentials, noToken, keychainLocked, cannotSave, changeInProgress
 
         var message: String {
             switch self {
             case .notAnAddress: "That isn't a web address."
             case .notHTTPS: "The address must start with https:// (http only for localhost, while developing)."
             case .hasCredentials: "Put the token in its own field, not in the address."
-            case .noToken: "The server needs its token (the Worker's APP_TOKEN)."
+            case .noToken: "Enter this phone's invitation for the alert server."
             case .keychainLocked: "The phone's Keychain can't be read until it's unlocked. Try again."
+            case .cannotSave: "Couldn't save the server settings in the Keychain. Your previous settings are still in use."
+            case .changeInProgress: "A server change is already in progress. Try again when it finishes."
             }
         }
     }
@@ -65,6 +67,13 @@ struct AlertServer: Equatable, Sendable {
     /// server keeps its secret whether it is built in or entered. (Earlier builds kept the
     /// built-in server's under `legacySecretAccount`; AlertStore carries that over.)
     var secretAccount: String {
+        let digest = SHA256.hash(data: Data(url.absoluteString.utf8))
+        return "alerts.secret.v2." + digest.map { String(format: "%02x", $0) }.joined()
+    }
+
+    /// Older builds folded the URL path to lowercase too. Only the server configured on
+    /// upgrade may inherit this value; selecting a new server must never claim it.
+    var legacyScopedAccount: String {
         let digest = SHA256.hash(data: Data(url.absoluteString.lowercased().utf8))
         return "alerts.secret." + digest.prefix(8).map { String(format: "%02x", $0) }.joined()
     }

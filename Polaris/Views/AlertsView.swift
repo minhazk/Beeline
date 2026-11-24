@@ -1,7 +1,7 @@
 import SwiftUI
 @preconcurrency import UserNotifications
 
-/// The lines you use regularly. Polaris's server watches them while you travel and
+/// The lines you use regularly. Beeline Home's server watches them while you travel and
 /// sends a Time Sensitive notification when one closes or is delayed.
 struct AlertsView: View {
     @Environment(AlertStore.self) private var store
@@ -45,7 +45,7 @@ struct AlertsView: View {
                         NavigationLink {
                             AlertEditor(alert: alert, isNew: false)
                         } label: {
-                            AlertRow(alert: alert, status: store.status[alert.id])
+                            AlertRow(alert: alert, status: store.status[alert.id], pending: store.delivery.pending[alert.id])
                         }
                     }
                     .onDelete { offsets in offsets.map { store.alerts[$0].id }.forEach(store.delete) }
@@ -62,19 +62,23 @@ struct AlertsView: View {
 
             Section {
                 Button("Add a line", systemImage: "plus") { editing = RouteAlert() }
-                    .disabled(!store.isConfigured)
+                    .disabled(!store.isConfigured || !store.canAddWatch)
                     // Drawn off plainly: in a pane the disabled style alone can read as live.
-                    .opacity(store.isConfigured ? 1 : 0.45)
+                    .opacity(store.isConfigured && store.canAddWatch ? 1 : 0.45)
             } footer: {
+                if let cleanupProblem = store.cleanupProblem {
+                    Text(cleanupProblem).foregroundStyle(Theme.warning)
+                }
+                if !store.canAddWatch { Text("You can keep up to 30 active watches. Remove one to add another.") }
                 if !store.isConfigured {
-                    Text("Alerts need a server to watch TfL while Polaris is closed, and this phone isn't set up with one. Enter its address and token in Settings, under Alerts server; the README says how to run your own.")
+                    Text("Add your server address and this phone's invitation under Settings → Alerts server to receive notifications when Beeline Home is closed.")
                 }
             }
 
             if !store.alerts.isEmpty, store.isConfigured { notifications }
 
             Section {
-                Text("Polaris checks TfL every two minutes during the times you set, and tells you once per disruption, again if it gets worse, and when good service is back. Closures and delays are Time Sensitive; minor delays and planned works are ordinary notifications. Planned works for the next day come the evening before, at 7 pm.")
+                Text("Beeline Home checks TfL every two minutes during the times you set, and tells you once per disruption, again if it gets worse, and when good service is back. Closures and delays are Time Sensitive; minor delays and planned works are ordinary notifications. Planned works for the next day come the evening before, at 7 pm.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
@@ -95,7 +99,7 @@ struct AlertsView: View {
         Section {
             switch store.permission?.authorizationStatus {
             case .denied:
-                Button("Notifications are off for Polaris", systemImage: "bell.slash") {
+                Button("Notifications are off for Beeline Home", systemImage: "bell.slash") {
                     openURL(URL(string: UIApplication.openNotificationSettingsURLString)!)
                 }
                 .foregroundStyle(Theme.warning)
@@ -138,6 +142,7 @@ struct AlertsView: View {
 struct AlertRow: View {
     var alert: RouteAlert
     var status: AlertStatus.Entry?
+    var pending: String? = nil
     var compact = false
 
     var body: some View {
@@ -151,7 +156,12 @@ struct AlertRow: View {
             if !compact {
                 Text(alert.whenText).font(.caption).foregroundStyle(.secondary)
             }
-            AlertSummary(status: status)
+            if let pending {
+                Label("On this phone only. \(pending)", systemImage: "exclamationmark.circle")
+                    .font(.caption).foregroundStyle(Theme.warning)
+            } else {
+                AlertSummary(status: status)
+            }
         }
         .padding(.vertical, 2)
         .accessibilityElement(children: .combine)

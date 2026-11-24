@@ -1,9 +1,10 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "polaris-alerts",
+  "name": "beeline-alerts",
   "main": "src/index.ts",
   "compatibility_date": "2026-10-01",
-  "observability": { "enabled": true, "head_sampling_rate": 1 },
+  // Device endpoints include the APNs token in the path. Keep application diagnostics only.
+  "observability": { "enabled": true, "logs": { "enabled": true, "invocation_logs": false } },
   // Your own deployment's values (a custom-domain "routes" entry, the D1 database_id, the
   // APNs team and topic) go in wrangler.local.jsonc, git-ignored, which `pnpm run deploy`,
   // `pnpm run migrate` and `pnpm run dev` lay over this file (scripts/wrangler.mjs).
@@ -11,6 +12,7 @@
   // served on its workers.dev address.
   // Every two minutes. A run with nobody inside their travel times reads D1 and stops:
   // TfL is only asked while someone is travelling, and the evening before for planned works.
+  "ratelimits": [{ "name": "STATUS_LIMITER", "namespace_id": "1001", "simple": { "limit": 12, "period": 60 } }],
   "triggers": { "crons": ["*/2 * * * *"] },
   // APNS_TEAM_ID (your Apple team ID) and APNS_TOPIC (the app's bundle ID, POLARIS_BUNDLE_ID)
   // are vars in wrangler.local.jsonc, or secrets. Secrets (wrangler secret put): APP_TOKEN,
@@ -19,8 +21,8 @@
   "d1_databases": [
     {
       "binding": "DB",
-      "database_name": "polaris-alerts",
-      // `wrangler d1 create polaris-alerts` prints the real one: put it in wrangler.local.jsonc.
+      "database_name": "beeline-alerts",
+      // `wrangler d1 create beeline-alerts` prints the real one: put it in wrangler.local.jsonc.
       // Deploying with this placeholder is refused.
       "database_id": "00000000-0000-0000-0000-000000000000"
     }

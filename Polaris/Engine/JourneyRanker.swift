@@ -104,6 +104,9 @@ enum JourneyRanker {
         var more: [RouteOption] = []
         /// Routes the filters took out.
         var hidden = 0
+
+        var onlyBlockedRoutes: Bool { top.isEmpty && !more.isEmpty && more.allSatisfy(\.journey.isBlocked) }
+        var mapJourneys: [Journey] { (onlyBlockedRoutes ? more : top).map(\.journey) }
     }
 
     /// Sources disagree by a minute or so; differences this small don't count.
