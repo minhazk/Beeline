@@ -40,7 +40,6 @@ struct RootView: View {
                             }
                         }
                 }
-                .foregroundStyle(Theme.ink)
                 .overlay { PaneCovers() }
                 .alert(item: $router.tripNotice) { notice in
                     switch notice.reason {
@@ -53,6 +52,7 @@ struct RootView: View {
                 }
                 // A rest the person drags to is remembered; one a page asks for is not.
                 .presentationDetents(router.detents, selection: Binding { router.detent } set: { router.picked($0) })
+                .presentationBackground(Theme.sheet)
                 // Wide open the sheet is a pane beside the map, which stays live at every height.
                 .presentationBackgroundInteraction(.enabled(upThrough: router.tallestOverMap))
                 .presentationDragIndicator(.visible)

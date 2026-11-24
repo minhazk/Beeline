@@ -11,6 +11,8 @@ struct AlertsView: View {
     @State private var editing: RouteAlert?
     @State private var testResult: String?
     @State private var testing = false
+    @State private var serverDraft = AlertServerDraft()
+    @FocusState private var serverField: String?
     /// Inside Settings it's pushed; from the home page it's its own sheet.
     var isSheet = true
 
@@ -29,17 +31,7 @@ struct AlertsView: View {
 
     private var contentForm: some View {
         Form {
-            if store.alerts.isEmpty {
-                Section {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Hear about trouble before you leave").font(.headline)
-                        Text("Add the lines you take most days, from where you get on to where you get off, and when you travel. If TfL reports a closure or delays on that stretch, you'll get a notification that comes through a Focus.")
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
-                    }
-                    .padding(.vertical, 4)
-                }
-            } else {
+            if !store.alerts.isEmpty {
                 Section {
                     ForEach(store.alerts) { alert in
                         NavigationLink {
@@ -61,29 +53,30 @@ struct AlertsView: View {
             }
 
             Section {
-                Button("Add a line", systemImage: "plus") { editing = RouteAlert() }
-                    .disabled(!store.isConfigured || !store.canAddWatch)
-                    // Drawn off plainly: in a pane the disabled style alone can read as live.
-                    .opacity(store.isConfigured && store.canAddWatch ? 1 : 0.45)
+                Button("Add line alert", systemImage: "plus") { editing = RouteAlert() }
+                    .disabled(!store.canAddWatch)
             } footer: {
                 if let cleanupProblem = store.cleanupProblem {
                     Text(cleanupProblem).foregroundStyle(Theme.warning)
                 }
                 if !store.canAddWatch { Text("You can keep up to 30 active watches. Remove one to add another.") }
-                if !store.isConfigured {
-                    Text("Add your server address and this phone's invitation under Settings → Alerts server to receive notifications when Beeline is closed.")
-                }
             }
 
-            if !store.alerts.isEmpty, store.isConfigured { notifications }
-
-            Section {
-                Text("Beeline checks TfL every two minutes during the times you set, and tells you once per disruption, again if it gets worse, and when good service is back. Closures and delays are Time Sensitive; minor delays and planned works are ordinary notifications. Planned works for the next day come the evening before, at 7 pm.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
+            if !store.isConfigured {
+                Section {
+                    NavigationLink("Connect alerts server") {
+                        Form { AlertServerSection(draft: serverDraft, focus: $serverField, showsHelp: false) }
+                            .navigationTitle("Alerts server")
+                            .keepsSheetWhenUnfolded(true)
+                    }
+                } footer: {
+                    Text("Connect a server to receive notifications.")
+                }
+            } else if !store.alerts.isEmpty {
+                notifications
             }
         }
-        .navigationTitle("Alerts")
+        .navigationTitle("Line alerts")
         .navigationBarTitleDisplayMode(.inline)
         .refreshable { await store.refreshStatus(force: true) }
         .task {

@@ -146,7 +146,7 @@ struct PaneCovers: View {
             ForEach(router.covers) { cover in
                 cover.content
                     .environment(\.paneClose, PaneClose { [router, id = cover.id] in router.close(id) })
-                    .background(Theme.paper)
+                    .background(Theme.sheet)
                     // Modal, as the same page is as a sheet on a phone: VoiceOver and the accessibility
                     // tree keep to the page on top, not the covered ones under it.
                     .accessibilityAddTraits(cover.id == router.covers.last?.id ? .isModal : [])
@@ -215,7 +215,7 @@ struct MapHalf: View {
                     .environment(\.paneClose, PaneClose { [router, id = panel.id] in router.close(id) })
                     // Its leading edge 24 pt past the fold, clear of the crease.
                     .frame(width: max(280, router.windowSize.width - foldX - router.safeArea.trailing - 40), height: panel.height)
-                    .background(Theme.paper)
+                    .background(Theme.sheet)
                     .clipShape(.rect(cornerRadius: 26))
                     .overlay(RoundedRectangle(cornerRadius: 26).strokeBorder(Theme.hairline, lineWidth: 0.75))
                     .shadow(color: .black.opacity(0.18), radius: 14, y: 4)

@@ -1,7 +1,9 @@
 import SwiftUI
 
-/// System surfaces and controls for the app's dark appearance.
+/// Adaptive system surfaces and controls.
 enum Theme {
+    static let sheet = Color(uiColor: .systemGroupedBackground)
+    static let group = Color(uiColor: .secondarySystemGroupedBackground)
     static let paper = Color(uiColor: .secondarySystemBackground)
     static let surface = Color(uiColor: .tertiarySystemBackground)
     static let ink = Color(uiColor: .label)
@@ -40,12 +42,16 @@ extension Color {
 }
 
 extension View {
-    /// A grouped surface with a separator edge. Only around
-    /// a group of rows or one distinct object, never nested.
+    /// A background for a group of rows or a distinct item.
     func surface(highlighted: Bool = false) -> some View {
-        background(.fill.tertiary, in: .rect(cornerRadius: Theme.radius))
-            .overlay(RoundedRectangle(cornerRadius: Theme.radius)
-                .strokeBorder(highlighted ? Theme.tint.opacity(0.55) : Theme.hairline, lineWidth: highlighted ? 1 : 0.75))
+        background(Theme.group, in: .rect(cornerRadius: Theme.radius))
+            .overlay {
+                if highlighted {
+                    RoundedRectangle(cornerRadius: Theme.radius)
+                        .strokeBorder(Theme.tint.opacity(0.55), lineWidth: 1)
+                        .allowsHitTesting(false)
+                }
+            }
     }
 }
 

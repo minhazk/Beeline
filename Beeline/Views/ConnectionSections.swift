@@ -49,18 +49,19 @@ struct ConnectionSections: View {
     @Environment(AppSettings.self) private var settings
     var draft: AlertServerDraft
     var focus: FocusState<String?>.Binding
+    var showsHelp = true
 
     var body: some View {
         @Bindable var settings = settings
         Section {
             KeyField(title: SetupItem.google.title, text: $settings.googleKeyOverride, hasBuiltIn: settings.hasBuiltInGoogleKey, focus: focus)
-        } footer: { SetupItem.google.caption }
+        } footer: { if showsHelp { SetupItem.google.caption } }
 
         Section {
             KeyField(title: SetupItem.tfl.title, text: $settings.tflKeyOverride, hasBuiltIn: settings.hasBuiltInTfLKey, focus: focus)
-        } footer: { SetupItem.tfl.caption }
+        } footer: { if showsHelp { SetupItem.tfl.caption } }
 
-        AlertServerSection(draft: draft, focus: focus)
+        AlertServerSection(draft: draft, focus: focus, showsHelp: showsHelp)
 
         Section {
             VStack(alignment: .leading, spacing: 4) {
@@ -76,7 +77,7 @@ struct ConnectionSections: View {
             }
         } header: {
             Text(SetupItem.contact.title)
-        } footer: { SetupItem.contact.caption }
+        } footer: { if showsHelp { SetupItem.contact.caption } }
     }
 }
 
@@ -174,6 +175,8 @@ struct AlertServerSection: View {
     @Bindable var draft: AlertServerDraft
     var focus: FocusState<String?>.Binding
 
+    var showsHelp = true
+
     private static let urlField = "alerts-url", tokenField = "alerts-token"
 
     var body: some View {
@@ -195,7 +198,7 @@ struct AlertServerSection: View {
         } header: {
             Text(SetupItem.alerts.title)
         } footer: {
-            SetupItem.alerts.caption
+            if showsHelp { SetupItem.alerts.caption }
         }
         // The token in a section of its own: a SecureField in the same group as an address is
         // taken for a login, and iOS offers to save the pair as a password.
@@ -233,8 +236,8 @@ struct AlertServerSection: View {
 
     private var summary: String {
         switch store.server {
-        case let server? where server.isBuiltIn: "Using the server built into this app. Enter another to use your own instead."
-        case let server?: "Using \(server.label). Its token and this phone's secret for it are kept in the Keychain."
+        case let server? where server.isBuiltIn: "Using the built-in server."
+        case let server?: "Using \(server.label)."
         case nil: "Alerts are off until a server is set."
         }
     }

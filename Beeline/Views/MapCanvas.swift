@@ -67,7 +67,7 @@ struct MapCanvas: View {
                 }
             }
         }
-        .mapStyle(satellite ? .hybrid(elevation: .realistic) : .standard(elevation: .realistic))
+        .mapStyle(mapStyle)
         .mapControls { MapScaleView() }
         // Frame routes in the part of the map the sheet leaves showing: above it, or,
         // wide open on a Duo, the half beside it.
@@ -135,6 +135,14 @@ struct MapCanvas: View {
         // Go starts before the first fix more often than not; pick you up when it comes.
         .onChange(of: router.trip?.position != nil) { _, located in
             if located, let trip = router.trip { scene.follow(near: trip.leg.start) }
+        }
+    }
+
+    private var mapStyle: MapStyle {
+        if satellite { return .hybrid(elevation: .realistic) }
+        switch scene.content {
+        case .results, .journey: return .standard(elevation: .realistic, emphasis: .muted)
+        default: return .standard(elevation: .realistic)
         }
     }
 

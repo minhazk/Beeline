@@ -139,6 +139,9 @@ struct AlertTests {
         #expect(alert.displayName == "Liverpool Street → Canary Wharf")
         #expect(alert.whenText == "Weekdays, 07:00–10:00 and 16:30–19:30")
 
+        alert.windows = [.init(start: 420, end: 600, direction: .back)]
+        #expect(alert.displayName == "Canary Wharf → Liverpool Street")
+
         // Whole lines have no ends: no ways to tell apart.
         var whole = RouteAlert(segments: [RouteAlert.Segment(line: .init(id: "district", name: "District line"), mode: "tube")])
         whole.windows[1].direction = .back

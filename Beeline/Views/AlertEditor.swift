@@ -44,12 +44,12 @@ struct AlertEditor: View {
             } header: {
                 Text("Lines")
             } footer: {
-                Text("Closures and delays anywhere between your stations count, and station closures where you get on or off.")
+                Text("Choose two stations to set a direction, or watch the whole line.")
             }
 
             Section {
                 if alert.ends != nil {
-                    Picker("Which way", selection: $alert.way) {
+                    Picker("Default direction", selection: $alert.way) {
                         ForEach([RouteAlert.Direction.both, .out, .back], id: \.self) { Text(alert.label($0)).tag($0) }
                     }
                 }
@@ -116,21 +116,15 @@ struct AlertEditor: View {
             } header: {
                 Text("When you travel")
             } footer: {
-                if let ends = alert.ends {
-                    if alert.waysDiffer {
-                        Text("Each time follows Which way unless you set its own. Trouble TfL reports one way only counts at times going that way.")
-                    } else if alert.way != .both {
-                        Text("Each time follows Which way unless you set its own. Trouble TfL reports one way only counts when it's towards \(alert.way == .out ? ends.to : ends.from).")
-                    } else {
-                        Text("Each time follows Which way unless you set its own.")
-                    }
+                if alert.ends != nil {
+                    Text("Choose a direction for each travel time.")
                 }
             }
 
             Section {
                 Toggle("Minor delays too", isOn: $alert.minorDelays)
             } footer: {
-                Text("Beeline checks during these times only. Planned works for the next day come the evening before.")
+                Text("Live alerts during travel times. Planned works at 7 pm the evening before.")
             }
 
             Section {
@@ -180,7 +174,7 @@ struct AlertEditor: View {
         let own = alert.windows.indices.contains(index) && alert.windows[index].direction != nil
         let current = alert.windows.indices.contains(index) ? alert.way(of: alert.windows[index]) : alert.way
         return Menu {
-            Picker("Way", selection: Binding {
+            Picker("Direction", selection: Binding {
                 current
             } set: { choice in
                 // Kept as chosen, even when it matches Which way now.
@@ -191,7 +185,7 @@ struct AlertEditor: View {
             }
             if own {
                 Section {
-                    Button("Follow Which way") {
+                    Button("Use default direction") {
                         guard alert.windows.indices.contains(index) else { return }
                         alert.windows[index].direction = nil
                     }
@@ -205,7 +199,7 @@ struct AlertEditor: View {
             .fixedSize(horizontal: !wraps, vertical: true)
             .foregroundStyle(own ? AnyShapeStyle(Theme.tint) : AnyShapeStyle(.secondary))
         }
-        .accessibilityLabel("Way for this time")
+        .accessibilityLabel("Direction for this time")
         .accessibilityValue(alert.label(current))
     }
 
