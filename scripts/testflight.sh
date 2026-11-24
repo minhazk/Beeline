@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # For whoever ships builds to their OWN App Store Connect account (the maintainer, or you
-# for your own fork): archives Polaris and uploads it, where it appears in TestFlight once
+# for your own fork): archives Beeline and uploads it, where it appears in TestFlight once
 # Apple has processed it (~10-30 min). Internal testing only: no beta review, installable
 # by the team's own testers. Building from source for yourself doesn't need it.
 #
-# Needs POLARIS_BUNDLE_ID and DEVELOPMENT_TEAM in Config/Secrets.xcconfig, and an app record
+# Needs BEELINE_BUNDLE_ID and DEVELOPMENT_TEAM in Config/Secrets.xcconfig, and an app record
 # with that bundle ID in your App Store Connect account. Signing and upload use the Apple ID
 # signed in to Xcode on this Mac (automatic signing, -allowProvisioningUpdates). Keys from
 # Config/Secrets.xcconfig are compiled in, so only distribute to people you'd give them to.
@@ -22,16 +22,16 @@ AUTH=(-allowProvisioningUpdates)
 scripts/generate.sh
 
 # Refuse a build that would go out as the example app or unsigned.
-setting() { xcodebuild -project Polaris.xcodeproj -target Polaris -configuration Release -showBuildSettings 2>/dev/null | sed -n "s/^ *$1 = //p" | head -1; }
+setting() { xcodebuild -project Beeline.xcodeproj -target Beeline -configuration Release -showBuildSettings 2>/dev/null | sed -n "s/^ *$1 = //p" | head -1; }
 TEAM="$(setting DEVELOPMENT_TEAM)"; BUNDLE="$(setting PRODUCT_BUNDLE_IDENTIFIER)"
 if [[ -z "$TEAM" || -z "$BUNDLE" || "$BUNDLE" == com.example.* ]]; then
-  echo "Set POLARIS_BUNDLE_ID and DEVELOPMENT_TEAM in Config/Secrets.xcconfig first (now: '${BUNDLE}', team '${TEAM}')." >&2
+  echo "Set BEELINE_BUNDLE_ID and DEVELOPMENT_TEAM in Config/Secrets.xcconfig first (now: '${BUNDLE}', team '${TEAM}')." >&2
   exit 1
 fi
 echo "Archiving $BUNDLE for team $TEAM"
-rm -rf build/Polaris.xcarchive build/export
-xcodebuild -project Polaris.xcodeproj -scheme Polaris -configuration Release \
-  -destination 'generic/platform=iOS' -archivePath build/Polaris.xcarchive \
+rm -rf build/Beeline.xcarchive build/export
+xcodebuild -project Beeline.xcodeproj -scheme Beeline -configuration Release \
+  -destination 'generic/platform=iOS' -archivePath build/Beeline.xcarchive \
   CURRENT_PROJECT_VERSION="$BUILD" "${AUTH[@]}" -quiet archive
 
 DEST=export; [[ $UPLOAD == 1 ]] && DEST=upload
@@ -47,6 +47,6 @@ cat > build/ExportOptions.plist <<PLIST
   <key>manageAppVersionAndBuildNumber</key><false/>
 </dict></plist>
 PLIST
-xcodebuild -exportArchive -archivePath build/Polaris.xcarchive \
+xcodebuild -exportArchive -archivePath build/Beeline.xcarchive \
   -exportOptionsPlist build/ExportOptions.plist -exportPath build/export "${AUTH[@]}"
 echo "Build $BUILD: $([[ $UPLOAD == 1 ]] && echo 'uploaded to App Store Connect' || echo "exported to build/export")"

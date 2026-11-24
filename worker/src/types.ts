@@ -1,5 +1,5 @@
 // What the app sends: the lines you use regularly and when you travel.
-// PolarisTests/Fixtures/alert-contract.json is the shared example both sides test against.
+// BeelineTests/Fixtures/alert-contract.json is the shared example both sides test against.
 
 export type Severity = "minor" | "delays" | "closed";
 

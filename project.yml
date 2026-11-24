@@ -1,6 +1,6 @@
-# Generates Polaris.xcodeproj (not committed): `scripts/generate.sh`.
+# Generates Beeline.xcodeproj (not committed): `scripts/generate.sh`.
 # Sources are folder globs, so adding a file never needs an edit here.
-name: Polaris
+name: Beeline
 options:
   deploymentTarget:
     iOS: "26.0"
@@ -13,6 +13,11 @@ configFiles:
   Debug: Config/Base.xcconfig
   Release: Config/Base.xcconfig
 settings:
+  configs:
+    Debug:
+      BEELINE_DISPLAY_NAME: Beeline
+    Release:
+      BEELINE_DISPLAY_NAME: Beeline Home
   base:
     CODE_SIGN_STYLE: Automatic
     SWIFT_VERSION: "6.0"
@@ -23,64 +28,64 @@ settings:
     ENABLE_USER_SCRIPT_SANDBOXING: YES
     SWIFT_STRICT_CONCURRENCY: complete
 targets:
-  Polaris:
+  Beeline:
     type: application
     platform: iOS
     sources:
-      - path: Polaris
+      - path: Beeline
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: "$(POLARIS_BUNDLE_ID)"
-        PRODUCT_NAME: Polaris
+        PRODUCT_BUNDLE_IDENTIFIER: "$(BEELINE_BUNDLE_ID)"
+        PRODUCT_NAME: Beeline
         # Must be set per target: XcodeGen's iOS target default ("1,2") wins otherwise.
         TARGETED_DEVICE_FAMILY: "1"
-        INFOPLIST_FILE: Polaris/Resources/Info.plist
-        CODE_SIGN_ENTITLEMENTS: Polaris/Resources/Polaris.entitlements
+        INFOPLIST_FILE: Beeline/Resources/Info.plist
+        CODE_SIGN_ENTITLEMENTS: Beeline/Resources/Beeline.entitlements
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
     dependencies:
-      - target: PolarisWidgets
+      - target: BeelineWidgets
   # The trip's Live Activity (Lock Screen and Dynamic Island).
-  PolarisWidgets:
+  BeelineWidgets:
     type: app-extension
     platform: iOS
     sources:
-      - path: PolarisWidgets
-      - path: Polaris/Shared
+      - path: BeelineWidgets
+      - path: Beeline/Shared
     info:
-      path: PolarisWidgets/Info.plist
+      path: BeelineWidgets/Info.plist
       properties:
-        CFBundleName: Beeline Home
-        CFBundleDisplayName: Beeline Home
+        CFBundleName: Beeline
+        CFBundleDisplayName: "$(BEELINE_DISPLAY_NAME)"
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         NSExtension:
           NSExtensionPointIdentifier: com.apple.widgetkit-extension
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: "$(POLARIS_BUNDLE_ID).widgets"
+        PRODUCT_BUNDLE_IDENTIFIER: "$(BEELINE_BUNDLE_ID).widgets"
         TARGETED_DEVICE_FAMILY: "1"
         SKIP_INSTALL: YES
   # Provider parsers against recorded responses, and the merge/rank engine. No network.
-  PolarisTests:
+  BeelineTests:
     type: bundle.unit-test
     platform: iOS
     sources:
-      - path: PolarisTests
+      - path: BeelineTests
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: "$(POLARIS_BUNDLE_ID).tests"
+        PRODUCT_BUNDLE_IDENTIFIER: "$(BEELINE_BUNDLE_ID).tests"
         GENERATE_INFOPLIST_FILE: YES
         TARGETED_DEVICE_FAMILY: "1"
     dependencies:
-      - target: Polaris
+      - target: Beeline
 schemes:
-  Polaris:
+  Beeline:
     build:
       targets:
-        Polaris: all
+        Beeline: all
     test:
       config: Debug
-      targets: [PolarisTests]
+      targets: [BeelineTests]
     run:
       config: Debug
     archive:

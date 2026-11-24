@@ -14,7 +14,7 @@
   // TfL is only asked while someone is travelling, and the evening before for planned works.
   "ratelimits": [{ "name": "STATUS_LIMITER", "namespace_id": "1001", "simple": { "limit": 12, "period": 60 } }],
   "triggers": { "crons": ["*/2 * * * *"] },
-  // APNS_TEAM_ID (your Apple team ID) and APNS_TOPIC (the app's bundle ID, POLARIS_BUNDLE_ID)
+  // APNS_TEAM_ID (your Apple team ID) and APNS_TOPIC (the app's bundle ID, BEELINE_BUNDLE_ID)
   // are vars in wrangler.local.jsonc, or secrets. Secrets (wrangler secret put): APP_TOKEN,
   // shared with the app; APNS_KEY and APNS_KEY_ID, the .p8 push key. TFL_APP_KEY is optional.
   // MAX_DEVICES (a var, default 100) caps how many phones can register.

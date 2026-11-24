@@ -1,4 +1,4 @@
-// Beeline Home alerts: the app registers its push token with the lines you use and when, and
+// Beeline alerts: the app registers its push token with the lines you use and when, and
 // asks what TfL says about them now. The checks run on a cron (checks.ts).
 
 import { Hono, type Context } from "hono";
@@ -148,7 +148,7 @@ app.onError((error, c) => {
   if (error instanceof TooManyRequests) return c.json({ error: "Try again in a minute" }, 429, { "Retry-After": "60" });
   if (error instanceof TfLUnavailable) return c.json({ error: error.message }, 503);
   if (error instanceof valid.Invalid) return c.json({ error: error.message }, 400);
-  if (error instanceof NotOwner) return c.json({ error: "This phone is registered by another install of Beeline Home" }, 403);
+  if (error instanceof NotOwner) return c.json({ error: "This phone is registered by another install of Beeline" }, 403);
   console.error(error);
   return c.json({ error: "Something went wrong" }, 500);
 });
