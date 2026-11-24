@@ -14,6 +14,9 @@ struct MapCanvas: View {
     @State private var height: CGFloat = 800
     /// The map is turned away from north, so the compass shows in place of 3D.
     @State private var isTurned = false
+    @State private var satellite = false
+    @State private var restingCamera: MapCamera?
+    @State private var showsLocationNotice = false
     /// The map's own buttons live outside it, in the lane under the clock.
     @Namespace private var mapScope
 
@@ -58,20 +61,26 @@ struct MapCanvas: View {
                 JourneyLines(journey: journey, dimmed: false, walkOverride: router.trip?.walk?.path,
                              activeLeg: router.trip.map { $0.leg.id } ?? scene.focusedLeg)
                 JourneyStops(journey: journey, destination: destination)
-                // A faster way on offer, edged in gold over the current one, to see where it goes.
+                // A faster way on offer, outlined in blue over the current one, to see where it goes.
                 if let offer = router.trip?.offer {
-                    JourneyLines(journey: offer.journey, dimmed: false, casing: Theme.gold)
+                    JourneyLines(journey: offer.journey, dimmed: false, casing: Theme.tint)
                 }
             }
         }
-        .mapStyle(.standard(elevation: .realistic, emphasis: .muted,
-                            pointsOfInterest: .including([.publicTransport]), showsTraffic: false))
+        .mapStyle(satellite ? .hybrid(elevation: .realistic) : .standard(elevation: .realistic))
         .mapControls { MapScaleView() }
         // Frame routes in the part of the map the sheet leaves showing: above it, or,
         // wide open on a Duo, the half beside it.
         .safeAreaPadding(.bottom, bottomInset)
         .safeAreaPadding(.leading, leadingInset)
-        .overlay(alignment: .topTrailing) { MapButtons(scope: mapScope, isTurned: isTurned) }
+        .overlay(alignment: .bottom) {
+            if !router.hasSideBar, router.detent != .large {
+                phoneMapControls.padding(.bottom, router.detent == .medium ? router.windowSize.height / 2 + 8 : bottomInset + 24)
+            }
+        }
+        .overlay(alignment: .topTrailing) {
+            if router.hasSideBar { MapButtons(scope: mapScope, isTurned: isTurned) }
+        }
         .mapScope(mapScope)
         .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height = $0 }
         .onMapCameraChange(frequency: .continuous) { context in
@@ -79,6 +88,12 @@ struct MapCanvas: View {
             // Only when it flips: the map's body doesn't follow the heading itself.
             let turned = Self.isTurned(context.camera.heading)
             if turned != isTurned { isTurned = turned }
+        }
+        .onMapCameraChange(frequency: .onEnd) { restingCamera = $0.camera }
+        .alert("Location is off", isPresented: $showsLocationNotice) {
+            Button("OK", role: .cancel) { }
+        } message: {
+            Text("Allow location for Beeline Home in Settings to center the map on you.")
         }
         .onChange(of: scenePhase, initial: true) { _, phase in
             if phase == .active { location.startHeading() } else { location.stopHeading() }
@@ -120,6 +135,57 @@ struct MapCanvas: View {
         // Go starts before the first fix more often than not; pick you up when it comes.
         .onChange(of: router.trip?.position != nil) { _, located in
             if located, let trip = router.trip { scene.follow(near: trip.leg.start) }
+        }
+    }
+
+    private var phoneMapControls: some View {
+        GlassEffectContainer(spacing: 8) {
+            HStack(alignment: .bottom) {
+                Button {
+                    guard var camera = restingCamera else { return }
+                    if isTurned { camera.heading = 0 } else { camera.pitch = camera.pitch > 10 ? 0 : 55 }
+                    withAnimation(.smooth) { scene.position = .camera(camera) }
+                } label: {
+                    Group {
+                        if isTurned { Image(systemName: "location.north.line.fill") }
+                        else { Text((restingCamera?.pitch ?? 0) > 10 ? "2D" : "3D").monospacedDigit() }
+                    }
+                    .font(.headline)
+                    .frame(width: 44, height: 44)
+                }
+                .buttonStyle(.plain)
+                .glassEffect(.regular.interactive(), in: .circle)
+                .accessibilityLabel(isTurned ? "Point north" : (restingCamera?.pitch ?? 0) > 10 ? "Switch to 2D" : "Switch to 3D")
+                Spacer()
+                VStack(spacing: 0) {
+                    Menu {
+                        Picker("Map style", selection: $satellite) {
+                            Label("Standard", systemImage: "map").tag(false)
+                            Label("Satellite", systemImage: "globe").tag(true)
+                        }
+                    } label: {
+                        Image(systemName: "map.fill").font(.title3.weight(.semibold))
+                            .frame(width: 44, height: 44)
+                    }
+                    .accessibilityLabel("Map style")
+                    Divider().frame(width: 30)
+                    Button {
+                        guard !location.isDenied else { showsLocationNotice = true; return }
+                        location.requestPermission()
+                        if let trip = router.trip { scene.follow(near: trip.leg.start) }
+                        else { scene.centerOnLocation(near: location.last) }
+                    } label: {
+                        Image(systemName: scene.position.followsUserLocation ? "location.fill" : "location")
+                            .font(.title3.weight(.semibold))
+                            .frame(width: 44, height: 44)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Center on my location")
+                }
+                .glassEffect(.regular, in: .capsule)
+            }
+            .tint(.primary)
+            .padding(.horizontal, 18)
         }
     }
 
@@ -173,7 +239,7 @@ struct MapCanvas: View {
                         .font(.system(size: 9, weight: .bold))
                         .foregroundStyle(.white)
                         .frame(width: 18, height: 18)
-                        .background(Theme.banner.opacity(0.85), in: .circle)
+                        .background(Theme.paper.opacity(0.85), in: .circle)
                         .overlay(Circle().strokeBorder(.white, lineWidth: 1.5))
                         .padding(8)
                         .contentShape(.circle)
@@ -198,12 +264,12 @@ struct LocationDot: View {
             if let heading = location.heading {
                 // A vaguer compass gets a wider beam.
                 HeadingBeam(spread: min(max(heading.accuracy * 2, 40), 110))
-                    .fill(RadialGradient(colors: [Theme.here.opacity(0.55), Theme.here.opacity(0)],
+                    .fill(RadialGradient(colors: [Theme.tint.opacity(0.55), Theme.tint.opacity(0)],
                                          center: .center, startRadius: 6, endRadius: 58))
                     .rotationEffect(.degrees(heading.degrees - scene.cameraHeading))
             }
             Circle().fill(.white).frame(width: 22, height: 22).shadow(color: .black.opacity(0.3), radius: 2.5, y: 1)
-            Circle().fill(Theme.here).frame(width: 15, height: 15)
+            Circle().fill(Theme.tint).frame(width: 15, height: 15)
         }
         .frame(width: 120, height: 120)
         .allowsHitTesting(false)
@@ -220,8 +286,8 @@ struct LocationDot: View {
 struct EstimatedDot: View {
     var body: some View {
         Circle()
-            .fill(Theme.here.opacity(0.15))
-            .strokeBorder(Theme.here, style: StrokeStyle(lineWidth: 3, dash: [4, 3]))
+            .fill(Theme.tint.opacity(0.15))
+            .strokeBorder(Theme.tint, style: StrokeStyle(lineWidth: 3, dash: [4, 3]))
             .frame(width: 22, height: 22)
             .allowsHitTesting(false)
             .accessibilityLabel("Your ride, about here by the clock")
@@ -250,7 +316,7 @@ struct JourneyLines: MapContent {
     /// A live walking route that replaces the source's path for the walk you're on.
     var walkOverride: [Coordinate]?
     var activeLeg: UUID?
-    /// The edge under each line: the paper's colour, or gold for a faster way on offer.
+    /// The edge under each line: the map casing or the blue outline for a faster alternative.
     var casing: Color = Theme.casing
 
     var body: some MapContent {
@@ -266,7 +332,7 @@ struct JourneyLines: MapContent {
                 } else {
                     let live = leg.id == activeLeg && walkOverride != nil
                     MapPolyline(coordinates: path.map(\.clLocation))
-                        .stroke(live ? Theme.here : Theme.ink.opacity(dimmed ? 0.3 : 0.65),
+                        .stroke(live ? Theme.tint : Theme.ink.opacity(dimmed ? 0.3 : 0.65),
                                 style: StrokeStyle(lineWidth: live ? 5 : 3.5, lineCap: .round, lineJoin: .round,
                                                    dash: live ? [] : [0.5, 7]))
                 }
@@ -291,7 +357,7 @@ struct JourneyStops: MapContent {
         }
         if let start = journey.legs.first?.start, !journey.legs.isEmpty {
             Annotation("", coordinate: start.clLocation) {
-                Circle().fill(Theme.here).stroke(.white, lineWidth: 2.5).frame(width: 14, height: 14)
+                Circle().fill(Theme.tint).stroke(.white, lineWidth: 2.5).frame(width: 14, height: 14)
             }
         }
         Annotation(destination.name, coordinate: (journey.legs.last?.end ?? destination.coordinate).clLocation) {

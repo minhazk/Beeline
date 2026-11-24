@@ -8,12 +8,15 @@ final class PlaceStore {
     var work: Place? { didSet { save(work, "work") } }
     private(set) var recents: [Place] { didSet { save(recents, "recents") } }
 
+    private(set) var favorites: [Place] { didSet { save(favorites, "favorites") } }
+
     private let defaults: UserDefaults
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
         home = Self.load("home", defaults)
         work = Self.load("work", defaults)
+        favorites = Self.load("favorites", defaults) ?? []
         recents = Self.load("recents", defaults) ?? []
     }
 
@@ -23,6 +26,13 @@ final class PlaceStore {
         recents.insert(place, at: 0)
         recents = Array(recents.prefix(8))
     }
+
+    func addFavorite(_ place: Place) {
+        guard !place.isCurrentLocation, !favorites.contains(where: { $0.coordinate == place.coordinate && $0.name == place.name }) else { return }
+        favorites.append(place)
+    }
+
+    func removeFavorite(_ place: Place) { favorites.removeAll { $0.id == place.id } }
 
     func forget(_ place: Place) { recents.removeAll { $0.id == place.id } }
 

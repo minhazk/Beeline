@@ -54,4 +54,9 @@ struct JourneyQuery: Codable, Hashable, Sendable {
     var origin: Place
     var destination: Place
     var time: TimeMode
+
+    static let londonExample = JourneyQuery(
+        origin: Place(name: "King's Cross", coordinate: .init(latitude: 51.5308, longitude: -0.1238)),
+        destination: Place(name: "Canary Wharf", coordinate: .init(latitude: 51.5035, longitude: -0.0187)),
+        time: .leaveNow)
 }

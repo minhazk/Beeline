@@ -6,7 +6,6 @@ struct SetupView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.paneClose) private var paneClose
     @Environment(AlertStore.self) private var alerts
-    @Environment(\.colorScheme) private var scheme
     @FocusState private var editing: String?
     @State private var serverDraft = AlertServerDraft()
 
@@ -30,7 +29,6 @@ struct SetupView: View {
                 ConnectionSections(draft: serverDraft, focus: $editing)
 
                 Section {
-                    // The one primary action: filled in the chart blue, as Theme's taps are.
                     Button(action: start) {
                         HStack {
                             Text("Start using Beeline Home").fontWeight(.semibold)
@@ -41,8 +39,6 @@ struct SetupView: View {
                     }
                     .buttonStyle(.borderedProminent)
                     .tint(Theme.tint)
-                    // Chart blue is deep by day and pale at night: white on the one, navy on the other.
-                    .foregroundStyle(scheme == .dark ? Theme.navy : .white)
                     .disabled(serverDraft.working)
                     .listRowBackground(Color.clear)
                     .listRowInsets(EdgeInsets())

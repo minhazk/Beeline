@@ -80,7 +80,6 @@ struct ResultsSheet: View {
             .animation(.snappy, value: ranked)
         }
         .scrollIndicators(.hidden)
-        .background(Theme.paper)
         .navigationTitle("Routes")
         .lowRestBar()
         .navigationBarTitleDisplayMode(.inline)
@@ -208,7 +207,7 @@ struct ResultsSheet: View {
         Button(action: action) {
             HStack(spacing: 6) {
                 if isStart {
-                    Circle().fill(Theme.here).stroke(.white, lineWidth: 2).frame(width: 12, height: 12)
+                    Circle().fill(Theme.tint).stroke(.white, lineWidth: 2).frame(width: 12, height: 12)
                 } else {
                     FractalStar(size: 18)
                 }
@@ -230,7 +229,7 @@ struct ResultsSheet: View {
             HStack(spacing: 12) {
                 Group {
                     if isStart {
-                        Circle().fill(Theme.here).stroke(.white, lineWidth: 2).frame(width: 12, height: 12)
+                        Circle().fill(Theme.tint).stroke(.white, lineWidth: 2).frame(width: 12, height: 12)
                     } else {
                         FractalStar(size: 18)
                     }

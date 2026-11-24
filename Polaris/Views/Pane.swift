@@ -249,9 +249,6 @@ private struct LowRestBar<Bar: View>: ViewModifier {
             // Faded rather than covered: at this height a list draws on past the sheet's foot.
             .opacity(isLow ? 0 : 1)
             .accessibilityHidden(isLow)
-            // The page's paper fades with it, which left a pushed page's bar the system's white or
-            // grey-black rather than the paper Home's bar keeps.
-            .background { if isLow { Theme.paper.ignoresSafeArea() } }
             .overlay {
                 if isLow {
                     // The whole card, not the room under a navigation bar that draws nothing here:

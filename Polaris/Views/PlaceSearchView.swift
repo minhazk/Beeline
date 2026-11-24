@@ -45,7 +45,7 @@ struct PlaceSearchView: View {
                     venueSection(venues)
                 } else if search.text.isEmpty {
                     if allowsCurrentLocation {
-                        row(icon: "location.fill", tint: Theme.here, title: "Current Location", subtitle: nil) {
+                        row(icon: "location.fill", tint: Theme.tint, title: "Current Location", subtitle: nil) {
                             // A fresh fix: the last one the app heard may be where the trip started.
                             Task {
                                 resolving = true
@@ -57,6 +57,9 @@ struct PlaceSearchView: View {
                     }
                     if let home = places.home { row(icon: "house.fill", tint: Theme.tint, title: "Home", subtitle: home.name) { pick(home) } }
                     if let work = places.work { row(icon: "briefcase.fill", tint: Theme.tint, title: "Work", subtitle: work.name) { pick(work) } }
+                    ForEach(places.favorites) { place in
+                        row(icon: "mappin", tint: Theme.tint, title: place.name, subtitle: place.subtitle) { pick(place) }
+                    }
                     if !places.recents.isEmpty {
                         Section("Recent") {
                             ForEach(places.recents) { place in

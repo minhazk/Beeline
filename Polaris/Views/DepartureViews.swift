@@ -106,10 +106,6 @@ private struct Tick: View {
     var isGone: Bool
     @ScaledMetric(relativeTo: .footnote) private var width = 44
     @ScaledMetric(relativeTo: .footnote) private var height = 40
-    @Environment(\.colorScheme) private var colorScheme
-
-    /// At night a wash of gold over navy turns olive, so yours is solid gold with navy text.
-    private var onGold: Bool { isPlanned && colorScheme == .dark }
 
     var body: some View {
         VStack(spacing: 1) {
@@ -117,15 +113,16 @@ private struct Tick: View {
                 .font(.footnote.weight(isPlanned ? .bold : .medium))
                 .monospacedDigit()
                 .strikethrough(departure.isCancelled)
-                .foregroundStyle(departure.isLate || departure.isCancelled
-                                 ? (onGold ? Color(red: 0.55, green: 0.12, blue: 0) : Theme.warning)
-                                 : (onGold ? Theme.navy : Theme.ink))
+                .foregroundStyle(departure.isLate || departure.isCancelled ? Theme.warning : Theme.ink)
             Text(caption)
                 .font(.caption2.weight(isPlanned ? .semibold : .regular))
-                .foregroundStyle(onGold ? AnyShapeStyle(Theme.navy) : isPlanned ? AnyShapeStyle(Theme.ink) : AnyShapeStyle(.secondary))
+                .foregroundStyle(isPlanned ? Theme.tint : .secondary)
         }
         .frame(width: width, height: height)
-        .background(isPlanned ? Theme.gold.opacity(onGold ? 1 : 0.32) : Theme.ink.opacity(0.045), in: .rect(cornerRadius: 9))
+        .background(isPlanned ? Theme.tint.opacity(0.12) : Color(uiColor: .quaternarySystemFill), in: .rect(cornerRadius: 9))
+        .overlay {
+            if isPlanned { RoundedRectangle(cornerRadius: 9).strokeBorder(Theme.tint, lineWidth: 1) }
+        }
         .opacity(isGone && !isPlanned ? 0.5 : 1)
         .accessibilityElement(children: .combine)
     }
@@ -172,7 +169,6 @@ struct BoardSheet: View {
             }
         }
         .scrollIndicators(.hidden)
-        .background(Theme.paper)
         .navigationTitle("Departures")
         .lowRestBar()
         .navigationBarTitleDisplayMode(.inline)
@@ -251,7 +247,6 @@ private struct BoardRow: View {
     var now: Date
     var difference: TimeInterval?
     var destination: String
-    @Environment(\.colorScheme) private var colorScheme
     @Environment(Router.self) private var router
     @Environment(\.boardIsNarrow) private var boardIsNarrow
 
@@ -308,7 +303,7 @@ private struct BoardRow: View {
                         .foregroundStyle(departure.isCancelled ? Theme.warning : Theme.ink)
                 }
                 if isPlanned {
-                    Text("Yours").font(.caption.weight(.semibold)).foregroundStyle(Theme.goldInk)
+                    Text("Yours").font(.caption.weight(.semibold)).foregroundStyle(Theme.tint)
                 } else if let difference, !departure.isCancelled {
                     Text(difference.signedMinutesText).font(.caption).foregroundStyle(.secondary)
                 }
@@ -318,15 +313,10 @@ private struct BoardRow: View {
         .frame(minHeight: 60)
         .background {
             if isPlanned {
-                // A gold wash over navy turns olive, so at night yours gets a gold edge instead.
-                if colorScheme == .dark {
-                    RoundedRectangle(cornerRadius: 12)
-                        .fill(Theme.gold.opacity(0.07))
-                        .stroke(Theme.goldInk.opacity(0.7), lineWidth: 1)
-                        .padding(3)
-                } else {
-                    Theme.gold.opacity(0.18)
-                }
+                RoundedRectangle(cornerRadius: 12)
+                    .fill(Theme.tint.opacity(0.08))
+                    .strokeBorder(Theme.tint.opacity(0.7), lineWidth: 1)
+                    .padding(3)
             }
         }
         .opacity(isGone && !isPlanned ? 0.5 : 1)

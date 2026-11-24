@@ -1,36 +1,15 @@
 import SwiftUI
 
-/// A printed star atlas: cool chart paper, navy ink, chart-blue for anything you
-/// can tap, and one gold star (the mark, the best route, Go). Line colours are
-/// the only other colour on screen. At night the same atlas turns over: night-sky
-/// paper, pale ink, and the gold star unchanged.
+/// System surfaces and controls for the app's dark appearance.
 enum Theme {
-    /// The sheet and every screen behind content.
-    static let paper = adaptive(light: rgb(0.961, 0.965, 0.980), dark: rgb(0.043, 0.059, 0.110))
-    /// Rows and grouped surfaces, a step up from the paper.
-    static let surface = adaptive(light: .white, dark: rgb(0.090, 0.110, 0.173))
-    /// Body text: a navy that reads as black, or a pale blue-white at night.
-    static let ink = adaptive(light: rgb(0.051, 0.082, 0.188), dark: rgb(0.914, 0.929, 0.965))
-    /// Navy in either appearance, for text on gold and on pale line colours.
-    static let navy = Color(red: 0.051, green: 0.082, blue: 0.188)
-    /// Tint for controls and links.
-    static let tint = adaptive(light: rgb(0.145, 0.329, 0.780), dark: rgb(0.478, 0.635, 1.0))
-    /// The star. A fill under navy text; too light for text on paper.
-    static let gold = Color(red: 0.949, green: 0.722, blue: 0.180)
-    /// Gold that draws a mark or a word on the surface: darker by day, brighter by night.
-    static let goldInk = adaptive(light: rgb(0.604, 0.416, 0.0), dark: rgb(0.949, 0.757, 0.306))
-    static let hairline = adaptive(light: rgb(0.051, 0.082, 0.188, 0.10), dark: rgb(1, 1, 1, 0.12))
-
-    /// Semantic colours, used only for what they mean.
-    static let live = adaptive(light: rgb(0.086, 0.478, 0.263), dark: rgb(0.310, 0.820, 0.545))
-    static let warning = adaptive(light: rgb(0.761, 0.255, 0.047), dark: rgb(1.0, 0.561, 0.353))
-    /// You, and where a trip starts.
-    static let here = adaptive(light: rgb(0.184, 0.435, 0.922), dark: rgb(0.353, 0.576, 1.0))
-
-    /// The Go banner and stop markers on the map: navy by day, a lifted night blue by night.
-    static let banner = adaptive(light: rgb(0.051, 0.082, 0.188), dark: rgb(0.137, 0.173, 0.290))
-    /// Under route lines on the map, so they stand off the streets.
-    static let casing = adaptive(light: .white, dark: rgb(0.043, 0.059, 0.110))
+    static let paper = Color(uiColor: .secondarySystemBackground)
+    static let surface = Color(uiColor: .tertiarySystemBackground)
+    static let ink = Color(uiColor: .label)
+    static let tint = Color(uiColor: .systemBlue)
+    static let hairline = Color(uiColor: .separator)
+    static let live = Color(uiColor: .systemGreen)
+    static let warning = Color(uiColor: .systemOrange)
+    static let casing = Color(uiColor: .systemBackground)
 
     /// Corner radius for grouped surfaces.
     static let radius: CGFloat = 18
@@ -40,7 +19,7 @@ enum Theme {
         case .google: Color(red: 0.26, green: 0.52, blue: 0.96)
         case .tfl: Color(red: 0.86, green: 0.14, blue: 0.12)
         case .transitous: Color(red: 0.10, green: 0.60, blue: 0.40)
-        case .apple: adaptive(light: rgb(0.45, 0.45, 0.45), dark: rgb(0.62, 0.62, 0.62))
+        case .apple: Color(uiColor: .systemGray)
         }
     }
 
@@ -48,16 +27,8 @@ enum Theme {
     /// Northern line's black disappears at night, so near-black lines lift to grey.
     static func line(_ color: RGB?) -> Color {
         guard let color else { return .gray }
-        let own = rgb(color.r, color.g, color.b)
-        return color.luminance < 0.2 ? adaptive(light: own, dark: rgb(0.64, 0.67, 0.74)) : Color(uiColor: own)
-    }
-
-    private static func rgb(_ r: Double, _ g: Double, _ b: Double, _ alpha: Double = 1) -> UIColor {
-        UIColor(red: r, green: g, blue: b, alpha: alpha)
-    }
-
-    private static func adaptive(light: UIColor, dark: UIColor) -> Color {
-        Color(uiColor: UIColor { $0.userInterfaceStyle == .dark ? dark : light })
+        let own = UIColor(red: color.r, green: color.g, blue: color.b, alpha: 1)
+        return color.luminance < 0.2 ? Color(uiColor: .systemGray2) : Color(uiColor: own)
     }
 
     /// Place names and the wordmark: New York, like an atlas's labels.
@@ -69,12 +40,12 @@ extension Color {
 }
 
 extension View {
-    /// A grouped surface: white on the paper with a hairline edge. Only around
+    /// A grouped surface with a separator edge. Only around
     /// a group of rows or one distinct object, never nested.
     func surface(highlighted: Bool = false) -> some View {
-        background(Theme.surface, in: .rect(cornerRadius: Theme.radius))
+        background(.fill.tertiary, in: .rect(cornerRadius: Theme.radius))
             .overlay(RoundedRectangle(cornerRadius: Theme.radius)
-                .strokeBorder(highlighted ? Theme.goldInk.opacity(0.55) : Theme.hairline, lineWidth: highlighted ? 1 : 0.75))
+                .strokeBorder(highlighted ? Theme.tint.opacity(0.55) : Theme.hairline, lineWidth: highlighted ? 1 : 0.75))
     }
 }
 
@@ -103,7 +74,7 @@ struct FractalStar: View {
     var size: CGFloat = 28
     /// Branches drawn solid (north, east, south, west); the rest are outlines.
     var lit: [Bool] = [true, true, true, true]
-    var color: Color = Theme.goldInk
+    var color: Color = Theme.tint
 
     var body: some View {
         Canvas { context, canvas in

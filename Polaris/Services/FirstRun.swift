@@ -1,6 +1,6 @@
 import Foundation
 
-/// The setup step a new install sees once: what works with nothing set, and the optional keys.
+/// The optional setup link offered on a new install: what works with nothing set, and the optional keys.
 /// Never for an install that has been used (keys, saved places, alerts, settings or Google
 /// counts already stored), so phones updating from earlier builds go straight to the map.
 enum FirstRun {
@@ -23,7 +23,7 @@ enum FirstRun {
 
     /// UserDefaults keys only an install that has been used has.
     static let priorUseKeys = [
-        "places.home", "places.work", "places.recents", "alerts", "alerts.registered", "alerts.token",
+        "places.home", "places.work", "places.recents", "places.favorites", "alerts", "alerts.registered", "alerts.token",
         "googleAllowance", "disabledProviders", "deepSearch", "sortOrder", "routeFilter", "appearance", "wholeMap",
     ]
     static let keychainAccounts = ["google", "tfl", "contact", "alerts.server.choice", "alerts.server.url"]
