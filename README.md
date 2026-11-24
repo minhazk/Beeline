@@ -293,7 +293,7 @@ MIT. See `LICENSE`.
 - `Polaris/Shared` and `PolarisWidgets`: the trip's Live Activity (the attributes are compiled into both targets).
 - `worker/`: the alerts server: `match.ts` (which disruptions touch your stretch), `policy.ts` (when to tell you), `checks.ts` (the cron), `apns.ts`.
 - `PolarisTests`: parsers against recorded Google/TfL/Transitous responses, boards, walking progress and leg-by-leg tracking, and the merge and ranking rules.
-- `Polaris/Design/Theme.swift`: the star-atlas palette, light and dark (System, Light or Dark in Settings).
+- `Polaris/Design/Theme.swift` defines the map and journey colours. The app and its trip Live Activity always use a dark appearance.
 
 Launch flags for checking screens without tapping (Debug only): `-setup` shows the first-run setup step; `-demo -demoReplan
 offer|wait|early` opens Go on a canned trip early onto the Bakerloo, with canned boards

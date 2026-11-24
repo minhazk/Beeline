@@ -50,7 +50,7 @@ struct TripLiveActivity: Widget {
                                 if let cost = state.missCostText {
                                     Text("If missed \(cost)")
                                         .fontWeight(.semibold)
-                                        .foregroundStyle(state.missIsCostly ? Palette.warningOnBlack : .white)
+                                        .foregroundStyle(state.missIsCostly ? Palette.warning : .white)
                                 }
                                 Text(detail).foregroundStyle(.secondary)
                             }
@@ -75,23 +75,14 @@ struct TripLiveActivity: Widget {
     }
 }
 
-/// The app's star-atlas colours (`Theme`), by day and by night.
+/// Trip colours for the Lock Screen and Dynamic Island, which are rendered outside the app.
 private enum Palette {
-    static let paper = adaptive(light: UIColor(red: 0.961, green: 0.965, blue: 0.980, alpha: 1),
-                                dark: UIColor(red: 0.043, green: 0.059, blue: 0.110, alpha: 1))
-    static let ink = adaptive(light: UIColor(red: 0.051, green: 0.082, blue: 0.188, alpha: 1),
-                              dark: UIColor(red: 0.914, green: 0.929, blue: 0.965, alpha: 1))
+    static let paper = Color(red: 0.043, green: 0.059, blue: 0.110)
+    static let ink = Color(red: 0.914, green: 0.929, blue: 0.965)
     static let navy = Color(red: 0.051, green: 0.082, blue: 0.188)
     static let gold = Color(red: 0.949, green: 0.722, blue: 0.180)
     static let here = Color(red: 0.184, green: 0.435, blue: 0.922)
-    static let warning = adaptive(light: UIColor(red: 0.761, green: 0.255, blue: 0.047, alpha: 1),
-                                  dark: UIColor(red: 1.0, green: 0.561, blue: 0.353, alpha: 1))
-    /// The Dynamic Island is black in either appearance.
-    static let warningOnBlack = Color(red: 1.0, green: 0.561, blue: 0.353)
-
-    private static func adaptive(light: UIColor, dark: UIColor) -> Color {
-        Color(uiColor: UIColor { $0.userInterfaceStyle == .dark ? dark : light })
-    }
+    static let warning = Color(red: 1.0, green: 0.561, blue: 0.353)
 
     static func line(_ hex: String?) -> Color? {
         rgb(hex).map { Color(red: $0.r, green: $0.g, blue: $0.b) }

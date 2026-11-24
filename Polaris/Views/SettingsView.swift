@@ -27,15 +27,6 @@ struct SettingsView: View {
         return Group {
             Form {
                 Section {
-                    Picker("Appearance", selection: $settings.appearance) {
-                        ForEach(Appearance.allCases) { Text($0.label).tag($0) }
-                    }
-                    .pickerStyle(.segmented)
-                    .listRowBackground(Color.clear)
-                    .listRowInsets(EdgeInsets())
-                } header: { Text("Appearance") }
-
-                Section {
                     NavigationLink {
                         AlertsView(isSheet: false)
                     } label: {

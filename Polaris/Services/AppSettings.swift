@@ -25,11 +25,6 @@ final class AppSettings {
         didSet { defaults.set(try? JSONEncoder().encode(routeFilter), forKey: "routeFilter") }
     }
 
-    /// Light, dark, or whatever the phone is set to.
-    var appearance: Appearance {
-        didSet { defaults.set(appearance.rawValue, forKey: "appearance") }
-    }
-
     /// Keys pasted in Settings live in the Keychain and beat the build-time ones.
     /// Written only when changed here, never while being read in (`loading`).
     var googleKeyOverride: String { didSet { if !loading { Keychain.set(googleKeyOverride, for: "google") } } }
@@ -43,7 +38,6 @@ final class AppSettings {
         deepSearch = defaults.object(forKey: "deepSearch") as? Bool ?? true
         sortOrder = defaults.string(forKey: "sortOrder").flatMap(SortOrder.init) ?? .best
         routeFilter = defaults.data(forKey: "routeFilter").flatMap { try? JSONDecoder().decode(RouteFilter.self, from: $0) } ?? RouteFilter()
-        appearance = defaults.string(forKey: "appearance").flatMap(Appearance.init) ?? .system
         googleKeyOverride = ""
         tflKeyOverride = ""
         contactOverride = ""
@@ -107,28 +101,6 @@ enum Contact {
         if let parts = URLComponents(string: text), ["https", "http"].contains(parts.scheme?.lowercased() ?? ""),
            let host = parts.host, host.contains(".") { return text }
         return nil
-    }
-}
-
-enum Appearance: String, CaseIterable, Identifiable {
-    case system, light, dark
-
-    var id: Self { self }
-
-    var label: String {
-        switch self {
-        case .system: "System"
-        case .light: "Light"
-        case .dark: "Dark"
-        }
-    }
-
-    var style: UIUserInterfaceStyle {
-        switch self {
-        case .system: .unspecified
-        case .light: .light
-        case .dark: .dark
-        }
     }
 }
 
