@@ -106,7 +106,8 @@ struct RouteAlert: Codable, Hashable, Identifiable, Sendable {
         guard !segments.isEmpty else { return "New alert" }
         if let ends {
             if waysDiffer { return "\(ends.from) ⇄ \(ends.to)" }
-            return way == .back ? "\(ends.to) → \(ends.from)" : "\(ends.from) → \(ends.to)"
+            let scheduledWay = windows.first.map(way(of:)) ?? way
+            return scheduledWay == .back ? "\(ends.to) → \(ends.from)" : "\(ends.from) → \(ends.to)"
         }
         return segments.map(\.line.name).uniqued().formatted(.list(type: .and))
     }

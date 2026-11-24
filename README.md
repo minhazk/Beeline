@@ -28,7 +28,7 @@ have data.
 Citymapper and Waze have no usable API (Citymapper closed theirs in June 2023;
 Waze has no transit), so Citymapper is a deep link.
 
-**Deep search** (on by default) asks Google five ways (fastest, fewer changes,
+**Search more route options** (on by default) asks Google five ways (fastest, fewer changes,
 less walking, rail only, bus only) and TfL three ways. Most "blind spots" are
 ranking rather than missing data, and the variants surface routes a source knows
 about but buries. Results with the same lines boarding within 4 minutes merge
@@ -92,9 +92,9 @@ that gets on or off at a closed station, or rides a closed stretch, is flagged i
 orange and can't be "Best"; it goes under the others. What's reported shows at the
 top of the list, in TfL's own words, and on the leg it touches.
 
-**Alerts for your lines.** For the journeys you make most days and wouldn't open a
-planner for: save a line from where you get on to where you get off (or from a journey's
-bell button, which takes its TfL lines as you'd ride them) and when you travel. A small
+**Line alerts.** Open Settings → Line alerts → Add line alert, or use the bell on a journey.
+Choose your line, boarding and exit stations, travel days, and times. Each time can have
+its own direction. You can save the schedule before connecting a notification server. A small
 Cloudflare Worker (`worker/`, which you host yourself: see below) checks TfL every two minutes
 during those times and sends a push for trouble on the track you ride: the stations TfL
 lists against a disruption, or else the sections its notice names ("between Paddington
@@ -203,8 +203,8 @@ send notifications to your build of the app, and sign the app with the push enti
 7. `pnpm run deploy`. Check `https://<your worker>/health` says `{"ok":true,"pushes":true}`;
    `"pushes":false` means one of `APNS_KEY`, `APNS_KEY_ID`, `APNS_TEAM_ID` or `APNS_TOPIC` is
    missing, and until it's set the cron judges nothing, so no disruption is lost.
-8. In Settings, open Alerts server, enter the server address and **that phone’s invitation**,
-   then tap Use this server. In Alerts, add a line and choose Send a test notification.
+8. Open Settings → Service connections. Enter the server address and **that phone’s invitation**,
+   then tap Use this server. Under Line alerts, save an alert, allow notifications, and choose Send a test notification.
 
 Each invitation admits one new phone at a time. Existing installations from earlier versions
 retain their registrations. Each install also sends a random device secret so only its owner can

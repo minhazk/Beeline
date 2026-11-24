@@ -6,11 +6,6 @@ struct SettingsView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.paneClose) private var paneClose
     @State private var picking: SavedSlot?
-    /// A key field being typed into.
-    @FocusState private var editingKey: String?
-    /// The alerts server as typed; closing Settings without "Use this server" drops it.
-    @State private var serverDraft = AlertServerDraft()
-
     enum SavedSlot: String, Identifiable {
         case home = "Home", work = "Work"
         var id: Self { self }
@@ -18,7 +13,7 @@ struct SettingsView: View {
 
     var body: some View {
         NavigationStack {
-            settingsForm.keepsSheetWhenUnfolded(editingKey != nil)
+            settingsForm
         }
     }
 
@@ -30,47 +25,38 @@ struct SettingsView: View {
                     NavigationLink {
                         AlertsView(isSheet: false)
                     } label: {
-                        Label("Alerts for your lines", systemImage: "bell.badge")
+                        Label("Line alerts", systemImage: "bell.badge")
                     }
-                } footer: {
-                    Text("A notification when a line you use regularly is closed or delayed.")
                 }
 
-                Section {
+                Section("Route sources") {
                     ForEach(ProviderID.allCases, id: \.self) { provider in
-                        Toggle(isOn: Binding(get: { settings.isEnabled(provider) }, set: { settings.setEnabled(provider, $0) })) {
-                            HStack(spacing: 10) {
-                                SourceBadge(provider: provider)
-                                VStack(alignment: .leading, spacing: 1) {
-                                    Text(provider.name)
-                                    Text(blurb(provider)).font(.caption).foregroundStyle(.secondary)
-                                }
-                            }
-                        }
+                        Toggle(provider == .apple ? "Apple Maps estimates" : provider.name,
+                               isOn: Binding(get: { settings.isEnabled(provider) }, set: { settings.setEnabled(provider, $0) }))
                     }
-                    Toggle(isOn: $settings.deepSearch) {
-                        VStack(alignment: .leading, spacing: 1) {
-                            Text("Deep search")
-                            Text("Ask Google and TfL several ways (fewer changes, less walking, rail or bus only) to surface routes their default ranking hides.")
-                                .font(.caption).foregroundStyle(.secondary)
-                        }
-                    }
-                } header: { Text("Sources") } footer: {
-                    // Quiet: what Google's free allowance has left this month, counted on this phone.
-                    Text("Google this month: \(GoogleUsage.shared.allowance.usedThisMonth(now: .now)) of \(GoogleAllowance.monthlyCap.formatted()) free requests. Deep search asks Google once past \(GoogleAllowance.deepUntil), and not at all past \(GoogleAllowance.monthlyCap - GoogleAllowance.reserve).")
+                    Toggle("Search more route options", isOn: $settings.deepSearch)
                 }
-
-                ConnectionSections(draft: serverDraft, focus: $editingKey)
 
                 Section("Saved places") {
                     savedRow(.home, place: places.home)
                     savedRow(.work, place: places.work)
                 }
 
-                Section("Data") {
-                    Text("Route data from Google, Transport for London (Powered by TfL Open Data), and Transitous (transitous.org/sources) with © OpenStreetMap contributors. Apple Maps provides estimates and place search.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                Section {
+                    NavigationLink("Service connections") {
+                        ServiceConnectionsView()
+                    }
+                    NavigationLink("Data credits") {
+                        List {
+                            Text("Google Routes")
+                            Text("Powered by TfL Open Data")
+                            Link("Transitous data sources", destination: URL(string: "https://transitous.org/sources")!)
+                            Link("© OpenStreetMap contributors", destination: URL(string: "https://www.openstreetmap.org/copyright")!)
+                            Text("Apple Maps estimates and place search")
+                        }
+                        .navigationTitle("Data credits")
+                        .keepsSheetWhenUnfolded(true)
+                    }
                 }
             }
             .navigationTitle("Settings")
@@ -83,15 +69,6 @@ struct SettingsView: View {
                     if slot == .home { places.home = place } else { places.work = place }
                 }
             }
-        }
-    }
-
-    private func blurb(_ provider: ProviderID) -> String {
-        switch provider {
-        case .google: "Full routes. Needs an API key."
-        case .tfl: "London's official planner, incl. National Rail."
-        case .transitous: "Open timetables for all of Great Britain."
-        case .apple: "Travel-time estimate only (no routes)."
         }
     }
 
@@ -109,5 +86,21 @@ struct SettingsView: View {
                 Button("Clear", role: .destructive) { if slot == .home { places.home = nil } else { places.work = nil } }
             }
         }
+    }
+}
+
+
+private struct ServiceConnectionsView: View {
+    @FocusState private var editingKey: String?
+    @State private var serverDraft = AlertServerDraft()
+
+    var body: some View {
+        Form {
+            ConnectionSections(draft: serverDraft, focus: $editingKey, showsHelp: false)
+            LabeledContent("Google requests this month",
+                           value: "\(GoogleUsage.shared.allowance.usedThisMonth(now: .now)) / \(GoogleAllowance.monthlyCap.formatted())")
+        }
+        .navigationTitle("Service connections")
+        .keepsSheetWhenUnfolded(true)
     }
 }

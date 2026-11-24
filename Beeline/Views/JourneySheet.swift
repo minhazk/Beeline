@@ -65,7 +65,7 @@ struct JourneySheet: View {
         // a navigation bar above it cost a row the 210 pt rest doesn't have.
         .toolbar(trip != nil ? .hidden : .automatic, for: .navigationBar)
         .toolbar {
-            if trip == nil, AlertStore.shared.isConfigured, hasTfLLines, !router.columnHoldsOneButton {
+            if trip == nil, hasTfLLines, !router.columnHoldsOneButton {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Alert me about these lines", systemImage: makingAlert ? "ellipsis" : "bell.badge") { makeAlert() }
                         .disabled(makingAlert || !AlertStore.shared.canAddWatch)
