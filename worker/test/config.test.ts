@@ -14,7 +14,7 @@ test("nor with the example's values copied over unchanged", () => {
   const problems = deployProblems(resolve(file("wrangler.jsonc"), file("wrangler.local.example.jsonc"))).join("; ");
   assert.match(problems, /database_id/);
   assert.match(problems, /APNS_TEAM_ID/);
-  assert.doesNotMatch(problems, /APNS_TOPIC/);
+  assert.match(problems, /APNS_TOPIC/);
   assert.match(deployProblems({ vars: { APNS_TOPIC: "com.example.app" } }).join(), /APNS_TOPIC/);
 });
 

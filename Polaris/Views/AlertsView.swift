@@ -45,7 +45,7 @@ struct AlertsView: View {
                         NavigationLink {
                             AlertEditor(alert: alert, isNew: false)
                         } label: {
-                            AlertRow(alert: alert, status: store.status[alert.id])
+                            AlertRow(alert: alert, status: store.status[alert.id], pending: store.delivery.pending[alert.id])
                         }
                     }
                     .onDelete { offsets in offsets.map { store.alerts[$0].id }.forEach(store.delete) }
@@ -62,13 +62,14 @@ struct AlertsView: View {
 
             Section {
                 Button("Add a line", systemImage: "plus") { editing = RouteAlert() }
-                    .disabled(!store.isConfigured)
+                    .disabled(!store.isConfigured || !store.canAddWatch)
                     // Drawn off plainly: in a pane the disabled style alone can read as live.
-                    .opacity(store.isConfigured ? 1 : 0.45)
+                    .opacity(store.isConfigured && store.canAddWatch ? 1 : 0.45)
             } footer: {
                 if let cleanupProblem = store.cleanupProblem {
                     Text(cleanupProblem).foregroundStyle(Theme.warning)
                 }
+                if !store.canAddWatch { Text("You can keep up to 30 active watches. Remove one to add another.") }
                 if !store.isConfigured {
                     Text("Add your server address and this phone's invitation under Settings → Alerts server to receive notifications when Beeline Home is closed.")
                 }
@@ -141,6 +142,7 @@ struct AlertsView: View {
 struct AlertRow: View {
     var alert: RouteAlert
     var status: AlertStatus.Entry?
+    var pending: String? = nil
     var compact = false
 
     var body: some View {
@@ -154,7 +156,12 @@ struct AlertRow: View {
             if !compact {
                 Text(alert.whenText).font(.caption).foregroundStyle(.secondary)
             }
-            AlertSummary(status: status)
+            if let pending {
+                Label("On this phone only. \(pending)", systemImage: "exclamationmark.circle")
+                    .font(.caption).foregroundStyle(Theme.warning)
+            } else {
+                AlertSummary(status: status)
+            }
         }
         .padding(.vertical, 2)
         .accessibilityElement(children: .combine)

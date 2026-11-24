@@ -27,6 +27,7 @@ struct AlertEditor: View {
     }
 
     var body: some View {
+        let saveProblem = store.saveProblem(for: alert)
         Form {
             if !isNew, let status = store.status[alert.id] { now(status) }
 
@@ -39,6 +40,7 @@ struct AlertEditor: View {
                 }
                 .onDelete { alert.segments.remove(atOffsets: $0) }
                 Button("Add a line", systemImage: "plus") { addingLine = true }
+                    .disabled(alert.segments.count >= RouteAlert.maxSegments)
             } header: {
                 Text("Lines")
             } footer: {
@@ -110,6 +112,7 @@ struct AlertEditor: View {
                     let last = alert.windows.last?.end ?? 8 * 60
                     alert.windows.append(RouteAlert.TimeWindow(start: min(last + 60, 22 * 60), end: min(last + 180, 23 * 60 + 45)))
                 }
+                .disabled(alert.windows.count >= RouteAlert.maxWindows)
             } header: {
                 Text("When you travel")
             } footer: {
@@ -130,8 +133,14 @@ struct AlertEditor: View {
                 Text("Beeline Home checks during these times only. Planned works for the next day come the evening before.")
             }
 
-            Section("Name") {
+            Section {
                 TextField(alert.defaultName, text: $alert.name)
+            } header: {
+                Text("Name")
+            } footer: {
+                if let saveProblem, !isNew || !alert.segments.isEmpty || !alert.name.isEmpty {
+                    Text(saveProblem).foregroundStyle(Theme.warning)
+                }
             }
 
             if !isNew {
@@ -154,15 +163,14 @@ struct AlertEditor: View {
             }
             ToolbarItem(placement: .confirmationAction) {
                 Button("Save", systemImage: "checkmark") {
-                    store.save(alert)
-                    dismiss(or: isNew ? paneClose : nil)
+                    if store.save(alert) { dismiss(or: isNew ? paneClose : nil) }
                 }
-                .disabled(!isValid)
+                .disabled(saveProblem != nil)
             }
         }
         .paneSheet(isPresented: $addingLine, id: "line-picker") {
             LinePicker { segment in
-                if !alert.segments.contains(segment) { alert.segments.append(segment) }
+                if alert.segments.count < RouteAlert.maxSegments, !alert.segments.contains(segment) { alert.segments.append(segment) }
             }
         }
     }
@@ -199,10 +207,6 @@ struct AlertEditor: View {
         }
         .accessibilityLabel("Way for this time")
         .accessibilityValue(alert.label(current))
-    }
-
-    private var isValid: Bool {
-        !alert.segments.isEmpty && !alert.days.isEmpty && !alert.windows.isEmpty && alert.windows.allSatisfy { $0.start != $0.end }
     }
 
     @ViewBuilder private func now(_ status: AlertStatus.Entry) -> some View {

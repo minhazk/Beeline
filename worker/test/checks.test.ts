@@ -328,13 +328,13 @@ test("a passing failure is tried a bounded number of times", async () => {
   assert.equal(pushesTo(requests).length, 3);
 });
 
-test("a refusal for good (bad topic) isn't retried: decided, logged, done", async () => {
-  const { env, db, requests } = await setup(400);
+test("a bad APNs topic keeps the phone and the unsent notification for a corrected configuration", async () => {
+  const { env, db, requests } = await setup((attempt) => attempt === 1 ? 400 : 200);
   const evening = Date.parse("2026-11-09T17:00:00Z");
   await runChecks(env, evening);
   await runChecks(env, evening + 120_000);
-  assert.equal(pushesTo(requests).length, 1);
-  assert.ok(JSON.parse(db.rows.get(token)!.state).alerts[contract().alerts[0].id].open, "recorded as handled");
+  assert.equal(pushesTo(requests).length, 2);
+  assert.ok(JSON.parse(db.rows.get(token)!.state).alerts[contract().alerts[0].id].open, "recorded after delivery");
 });
 
 test("planned works: a passing failure leaves the evening open for that alert only", async () => {

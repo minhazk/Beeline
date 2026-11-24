@@ -155,6 +155,9 @@ struct OpenInRow: View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Check with another app").font(.footnote.weight(.semibold)).foregroundStyle(.secondary)
                 .padding(.horizontal, 4)
+            if let reminder = query.time.handoffTimeReminder {
+                Text(reminder).font(.footnote).foregroundStyle(.secondary)
+            }
             HStack(spacing: 8) {
                 ForEach(OpenIn.allCases) { app in
                     Button { app.open(query) } label: {

@@ -110,6 +110,7 @@ export async function runChecks(env: Env, now = Date.now()): Promise<{ devices: 
         return false;
       }
       if (outcome === "sent") sent++;
+      if (outcome === "configuration") return false;
       if (outcome === "retry" && (retries[key] ?? 0) + 1 < MAX_RETRIES) {
         retries[key] = (retries[key] ?? 0) + 1;
         return false;
@@ -192,10 +193,8 @@ export function waysFor(alert: Alert, base: Alert, lines: LineStatus[], stations
   };
 }
 
-/** One push: sent; the phone is gone; worth trying again (APNs busy or rate limited, a network
- * failure, an expired provider token it has just dropped); or refused for good (bad topic,
- * payload, key), which is logged loudly and not retried. */
-async function attempt(env: Env, token: string, environment: Device["environment"], push: Push, now: number): Promise<"sent" | "gone" | "retry" | "refused"> {
+/** Configuration errors leave the registration and the pending notice available for a retry. */
+async function attempt(env: Env, token: string, environment: Device["environment"], push: Push, now: number): Promise<"sent" | "gone" | "retry" | "configuration" | "refused"> {
   try {
     const result = await send(env, token, environment, push, now);
     if (result.gone) {
@@ -203,6 +202,10 @@ async function attempt(env: Env, token: string, environment: Device["environment
       return "gone";
     }
     if (result.status === 200) return "sent";
+    if (["BadDeviceToken", "DeviceTokenNotForTopic", "BadTopic", "TopicDisallowed", "InvalidProviderToken"].includes(result.reason ?? "")) {
+      console.error("Check APNs topic, environment and signing key", result.reason);
+      return "configuration";
+    }
     if (result.status === 429 || result.status >= 500 || result.reason === "ExpiredProviderToken") {
       console.error("APNs busy, will retry", result.status, result.reason);
       return "retry";

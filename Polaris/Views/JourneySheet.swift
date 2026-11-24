@@ -69,7 +69,7 @@ struct JourneySheet: View {
             if trip == nil, AlertStore.shared.isConfigured, hasTfLLines, !router.columnHoldsOneButton {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Alert me about these lines", systemImage: makingAlert ? "ellipsis" : "bell.badge") { makeAlert() }
-                        .disabled(makingAlert)
+                        .disabled(makingAlert || !AlertStore.shared.canAddWatch)
                 }
             }
         }
@@ -504,7 +504,7 @@ private struct LegRow: View {
     }
 
     @ViewBuilder private var transitDetail: some View {
-        ForEach(notices, id: \.title) { notice in
+        ForEach(notices, id: \.displayID) { notice in
             AlertLine(alert: ServiceAlert(header: notice.title, detail: notice.detail.isEmpty ? nil : notice.detail),
                       minor: notice.severity == .minor)
         }

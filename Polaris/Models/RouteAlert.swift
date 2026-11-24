@@ -130,7 +130,7 @@ struct RouteAlert: Codable, Hashable, Identifiable, Sendable {
         case Set(1...7): "Every day"
         case [6, 7]: "Weekends"
         default:
-            days.sorted().map { Calendar.current.shortWeekdaySymbols[$0 % 7] }.formatted(.list(type: .and))
+            days.filter { (1...7).contains($0) }.sorted().map { Calendar.current.shortWeekdaySymbols[$0 % 7] }.formatted(.list(type: .and))
         }
     }
 
@@ -153,6 +153,64 @@ struct RouteAlert: Codable, Hashable, Identifiable, Sendable {
             var copy = alert
             copy.name = alert.displayName
             try copy.encode(to: encoder)
+        }
+    }
+
+    static let maxAlerts = 30, maxSegments = 8, maxWindows = 8, maxName = 120
+
+    /// The Worker measures strings in UTF-16 units. Keep the local draft intact so it can be corrected.
+    var deliveryProblem: String? {
+        func identifier(_ text: String) -> Bool {
+            text.utf16.count <= 64 && text.wholeMatch(of: /[A-Za-z0-9._-]+/) != nil && text.contains { $0 != "." }
+        }
+        func stationID(_ text: String) -> Bool {
+            text.utf16.count <= 200 && text.wholeMatch(of: /[A-Za-z0-9._-]+(\|[A-Za-z0-9._-]+)*/) != nil
+        }
+        func station(_ station: Station) -> Bool {
+            stationID(station.id) && !station.name.isEmpty && station.name.utf16.count <= 120
+        }
+        guard identifier(id) else { return "Recreate this watch to replace its invalid identifier." }
+        guard displayName.utf16.count <= Self.maxName else { return "Use a shorter name (up to 120 characters; some symbols count twice)." }
+        guard (1...Self.maxSegments).contains(segments.count) else { return "Choose between 1 and 8 line sections." }
+        guard (1...Self.maxWindows).contains(windows.count) else { return "Choose between 1 and 8 travel times." }
+        guard (1...7).contains(days.count), days.allSatisfy({ (1...7).contains($0) }) else { return "Choose your travel days." }
+        guard windows.allSatisfy({ (0..<1440).contains($0.start) && (0..<1440).contains($0.end) && $0.start != $0.end }) else {
+            return "Give each travel time a different start and end."
+        }
+        for part in segments {
+            guard identifier(part.line.id), !part.line.name.isEmpty, part.line.name.utf16.count <= 80,
+                  NetworkStatus.mode(part.mode) != nil, part.from.map(station) != false, part.to.map(station) != false,
+                  part.stations.count <= 200, part.stations.allSatisfy(stationID) else { return "Remove and reselect the affected line section." }
+        }
+        return nil
+    }
+
+    /// Select complete watches in saved order. Older oversized watches stay on the phone for editing.
+    struct Delivery {
+        private(set) var ready: [RouteAlert] = []
+        private(set) var pending: [String: String] = [:]
+        private var lines = Set<String>()
+        private var bytes: Int
+
+        init(_ alerts: [RouteAlert]) {
+            let envelope = Registration(environment: "production", timeZone: TimeZone.current.identifier, alerts: [])
+            bytes = (try? JSONEncoder().encode(envelope).count) ?? 256
+            for alert in alerts {
+                if let problem = include(alert) { pending[alert.id] = problem }
+            }
+        }
+
+        mutating func include(_ alert: RouteAlert) -> String? {
+            if let problem = alert.deliveryProblem { return problem }
+            guard ready.count < RouteAlert.maxAlerts else { return "You can watch up to 30 routes. Remove another watch to make room." }
+            let updatedLines = lines.union(alert.segments.map(\.line.id))
+            guard updatedLines.count <= 48 else { return "Your watches can cover up to 48 different lines. Remove a line to make room." }
+            guard let size = try? JSONEncoder().encode(Wire(alert: alert)).count,
+                  bytes + size + (ready.isEmpty ? 0 : 1) <= 256 * 1024 else { return "Shorten a line section or remove a watch to fit the server's size limit." }
+            bytes += size + (ready.isEmpty ? 0 : 1)
+            lines = updatedLines
+            ready.append(alert)
+            return nil
         }
     }
 }

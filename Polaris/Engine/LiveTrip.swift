@@ -49,7 +49,17 @@ final class LiveTrip {
     struct Fix: Equatable, Sendable {
         var coordinate: Coordinate
         var at: Date
+        var horizontalAccuracy: Double = 5
     }
+
+    enum Completion: Equatable { case arrived, expired }
+    var onCompletion: ((Completion) -> Void)?
+    private(set) var completion: Completion?
+    private var stopped = false
+    private var wasAwayFromDestination = false
+    private var firstArrivalFix: Date?
+    /// An ETA based on the remaining walk can keep moving even when the phone is stationary.
+    static let expiryGrace: TimeInterval = 3 * 60 * 60
 
     private let location: LocationService
     private let departures: DepartureStore
@@ -123,7 +133,7 @@ final class LiveTrip {
         self.buses = buses
         self.clock = clock
         self.fixSource = fix ?? { [location] in
-            location.live.map { Fix(coordinate: Coordinate($0.coordinate), at: $0.timestamp) }
+            location.live.map { Fix(coordinate: Coordinate($0.coordinate), at: $0.timestamp, horizontalAccuracy: $0.horizontalAccuracy) }
         }
         self.timetable = boards ?? { [departures] in departures.board($0)?.value }
         self.loadBoard = loadBoard ?? { [departures] in await departures.load($0) }
@@ -326,6 +336,7 @@ final class LiveTrip {
     }
 
     func take(_ step: Step) {
+        guard !stopped else { return }
         now = clock()
         switch step {
         case .boarded(let ride):
@@ -341,7 +352,7 @@ final class LiveTrip {
     }
 
     func start() {
-        guard tick == nil else { return }
+        guard !stopped, tick == nil else { return }
         Self.current = self
         location.startTracking()
         now = clock()
@@ -358,14 +369,16 @@ final class LiveTrip {
         let later = journey.legs.dropFirst(legIndex).filter { $0.mode.isTransit && timetable($0) == nil }
         Task { [loadBoard] in for ride in later { await loadBoard(ride) } }
         tick = Task { [weak self] in
-            while !Task.isCancelled {
+            while !Task.isCancelled, self != nil {
                 self?.refresh()
-                try? await Task.sleep(for: .seconds(2))
+                do { try await Task.sleep(for: .seconds(2)) } catch { return }
             }
         }
     }
 
     func stop() {
+        guard !stopped else { return }
+        stopped = true
         tick?.cancel()
         tick = nil
         routing?.cancel()
@@ -380,6 +393,42 @@ final class LiveTrip {
         store?.clear()
         lastSaved = nil
         if Self.current === self { Self.current = nil }
+    }
+
+    private func complete(_ reason: Completion) {
+        completion = reason
+        stop()
+        onCompletion?(reason)
+    }
+
+    /// Two distinct, recent fixes must place the phone at the destination on the final leg.
+    /// A loop starting at its finish must first leave it. On resume, a confirmed boarding
+    /// at a distant stop also proves the traveller has been away.
+    private func reachedDestination() -> Bool {
+        guard let fix = fixSource(), (0...25).contains(fix.horizontalAccuracy),
+              (0...30).contains(now.timeIntervalSince(fix.at)), fix.at >= log.began else {
+            firstArrivalFix = nil
+            return false
+        }
+        let destination = query.destination.coordinate
+        let distance = fix.coordinate.distance(to: destination)
+        if distance - fix.horizontalAccuracy > 75 { wasAwayFromDestination = true }
+        let radius = leg.mode.isTransit ? TripProgress.alightedDistance : TripProgress.arrivedDistance
+        guard isLastLeg, distance + fix.horizontalAccuracy <= radius else {
+            firstArrivalFix = nil
+            return false
+        }
+        guard wasAwayFromDestination || log.boardings.keys.contains(where: {
+            guard let start = journey.legs[safe: $0]?.start else { return false }
+            return start.distance(to: destination) > 100
+        }) else { return false }
+        if let first = firstArrivalFix {
+            let elapsed = fix.at.timeIntervalSince(first)
+            if (3...30).contains(elapsed) { return true }
+            if (0..<3).contains(elapsed) { return false }
+        }
+        firstArrivalFix = fix.at
+        return false
     }
 
     /// Picked up after Polaris was closed: one look at the clock and where you are, as a tick
@@ -429,7 +478,12 @@ final class LiveTrip {
 
     /// One look at the clock and where you are. Go does this every two seconds.
     func refresh() {
+        guard !stopped else { return }
         now = clock()
+        if !catchingUp, now > max(log.began, journey.arrival).addingTimeInterval(Self.expiryGrace) {
+            complete(.expired)
+            return
+        }
         // Resumed before any fix: the first fresh one catches the trip up as the launch would have.
         if let since = awaitingFix, !catchingUp {
             if now.timeIntervalSince(since) > 120 {
@@ -461,6 +515,10 @@ final class LiveTrip {
         // for the board, for the restore's quiet minute at most.
         if advanced > legIndex, holdsUnseenRide { advanced = legIndex }
         if advanced != legIndex { moveTo(advanced) }
+        if !catchingUp, reachedDestination() {
+            complete(.arrived)
+            return
+        }
 
         if !leg.mode.isTransit {
             if let walk, let position = trustedPosition { walkProgress = PathProgress.locate(position, on: walk.path) }
@@ -498,7 +556,7 @@ final class LiveTrip {
 
     /// The Live Activity and the alerts follow the timeline, and Go looks for a reason to re-plan.
     private func publish() {
-        guard !catchingUp else { return }
+        guard !stopped, !catchingUp else { return }
         considerReplan()
         activity.update(activityState())
         var pending = Set((sentAlerts ?? []).map(\.id))
@@ -526,7 +584,7 @@ final class LiveTrip {
     /// Keeps the trip for a relaunch, when something worth keeping has changed: a step, a
     /// boarding, a leg ended, a Switch, a search or a declined offer (not a walk's seconds).
     private func persist() {
-        guard let store, !catchingUp else { return }
+        guard !stopped, let store, !catchingUp else { return }
         let snapshot = saved
         if let lastSaved, lastSaved.sameAs(snapshot) { return }
         lastSaved = snapshot

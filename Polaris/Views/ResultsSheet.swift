@@ -64,9 +64,16 @@ struct ResultsSheet: View {
                 if !isTight { appleHintIfQuicker(reference) }
                 if !ranked.top.isEmpty { routeGroup(ranked.top, reference: reference, leadFirst: true) }
                 if isTight { appleHintIfQuicker(reference) }
-                if !ranked.more.isEmpty { moreSection(ranked.more, reference: reference) }
+                if ranked.onlyBlockedRoutes {
+                    Label("All routes go through a reported closure", systemImage: "exclamationmark.triangle.fill")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(Theme.warning)
+                    routeGroup(ranked.more, reference: nil, leadFirst: false)
+                } else if !ranked.more.isEmpty {
+                    moreSection(ranked.more, reference: reference)
+                }
                 if ranked.hidden > 0 { hiddenNote(ranked.hidden, all: ranked.top.isEmpty && ranked.more.isEmpty) }
-                if ranked.top.isEmpty && ranked.hidden == 0 && !model.isSearching { emptyState }
+                if ranked.top.isEmpty && ranked.more.isEmpty && ranked.hidden == 0 && !model.isSearching { emptyState }
             }
             .padding(.horizontal, 16)
             .padding(.bottom, 30)
@@ -83,6 +90,7 @@ struct ResultsSheet: View {
                 ToolbarItem(placement: .topBarTrailing) {
                     Menu {
                         Section("Open this trip in") {
+                            if let reminder = query.time.handoffTimeReminder { Text(reminder) }
                             ForEach(OpenIn.allCases) { app in
                                 Button(app.name, systemImage: app.symbol) { app.open(query) }
                             }
@@ -113,13 +121,13 @@ struct ResultsSheet: View {
         .task(id: query) { if searched != query { await search() } }
         .onAppear {
             isOnTop = true
-            scene.showResults(ranked.top.map(\.journey))
+            scene.showResults(ranked.mapJourneys)
             router.settle(.medium)
         }
         .onDisappear { isOnTop = false }
         // Wide open the pane has room for the slower routes too, so they show without a tap.
         .onChange(of: router.foldX != nil, initial: true) { _, wide in if wide { showMore = true } }
-        .onChange(of: ranked.top.map(\.id)) { if isOnTop { scene.showResults(self.ranked.top.map(\.journey)) } }
+        .onChange(of: ranked.mapJourneys) { _, journeys in if isOnTop { scene.showResults(journeys) } }
         #if DEBUG
         .onChange(of: model.isSearching) {
             if Demo.opensDetail, !model.isSearching, !didDemo, let first = self.ranked.top.first?.journey {
@@ -336,13 +344,13 @@ struct ResultsSheet: View {
 
     /// Everything reported about the lines and stations these routes use, worst first.
     private func notices(_ ranked: JourneyRanker.Ranked) -> [ServiceNotice] {
-        var seen = Set<String>()
+        var seen = Set<ServiceNotice.DisplayID>()
         var all = (ranked.top + ranked.more).flatMap(\.journey.notices)
         #if DEBUG
         if Demo.addsNotices, !ranked.top.isEmpty { all += Demo.notices }
         #endif
         return all
-            .filter { seen.insert($0.title + $0.detail).inserted }
+            .filter { seen.insert($0.displayID).inserted }
             .sorted { $0.severity != $1.severity ? $0.severity > $1.severity : $0.title < $1.title }
     }
 
@@ -398,7 +406,7 @@ struct ResultsSheet: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Apple Maps estimates \(estimate.travelTime.minutesText)")
                         .font(.subheadline.weight(.semibold))
-                    Text("Quicker than anything here. Open it to see Apple's route.")
+                    Text(query.time.handoffTimeReminder ?? "Quicker than anything here. Open it to see Apple's route.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
@@ -572,7 +580,7 @@ struct NoticeList: View {
     /// Where every line counts (a shallow sheet below its full height): one row, the worst
     /// notice and how many more, until it is tapped, so the best route stays in view.
     var summarised = false
-    @State private var open: Set<String> = []
+    @State private var open: Set<ServiceNotice.DisplayID> = []
     @State private var showAll = false
 
     var body: some View {
@@ -586,7 +594,7 @@ struct NoticeList: View {
     private var list: some View {
         let shown = showAll ? notices : Array(notices.prefix(3))
         return VStack(alignment: .leading, spacing: 0) {
-            ForEach(Array(shown.enumerated()), id: \.element.title) { index, notice in
+            ForEach(Array(shown.enumerated()), id: \.element.displayID) { index, notice in
                 if index > 0 { Divider().padding(.leading, 40) }
                 row(notice)
             }
@@ -636,7 +644,7 @@ struct NoticeList: View {
     }
 
     private func row(_ notice: ServiceNotice) -> some View {
-        let key = notice.title + notice.detail
+        let key = notice.displayID
         let expanded = open.contains(key)
         return Button {
             withAnimation(.snappy) { if expanded { open.remove(key) } else { open.insert(key) } }
@@ -650,7 +658,7 @@ struct NoticeList: View {
                         SourceBadge(provider: notice.source)
                     }
                     if notice.severity == .closed {
-                        Text("Routes through it are under the others, below.").font(.footnote).foregroundStyle(Theme.warning)
+                        Text("Check this closure before travelling.").font(.footnote).foregroundStyle(Theme.warning)
                     }
                     if !notice.detail.isEmpty, expanded || !headlinesOnly {
                         Text(notice.detail)

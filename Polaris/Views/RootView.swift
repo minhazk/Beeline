@@ -42,6 +42,15 @@ struct RootView: View {
                 }
                 .foregroundStyle(Theme.ink)
                 .overlay { PaneCovers() }
+                .alert(item: $router.tripNotice) { notice in
+                    switch notice.reason {
+                    case .arrived:
+                        Alert(title: Text("Arrived"), message: Text(notice.destination), dismissButton: .default(Text("Done")))
+                    case .expired:
+                        Alert(title: Text("Trip tracking ended"), message: Text("This journey is past its arrival time."),
+                              dismissButton: .default(Text("Done")))
+                    }
+                }
                 // A rest the person drags to is remembered; one a page asks for is not.
                 .presentationDetents(router.detents, selection: Binding { router.detent } set: { router.picked($0) })
                 // Wide open the sheet is a pane beside the map, which stays live at every height.

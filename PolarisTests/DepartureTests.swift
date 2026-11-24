@@ -76,6 +76,17 @@ struct DepartureTests {
         #expect(value("time") == Time.isoString(Time.iso("2026-10-31T17:48:00Z")!))
     }
 
+    @Test func aCachedNearbyBoardDropsDepartedTrainsAsTimePasses() throws {
+        let lines = try DepartureProvider.parseNearby(ProviderParsingTests.fixture("transitous-nearby"),
+                                                      around: Self.kingsCross, now: Time.iso("2026-10-31T18:19:00Z")!)
+        let line = try #require(lines.first { $0.departures.count >= 2 && $0.departures.first?.expected != $0.departures.last?.expected })
+        let first = try #require(line.departures.first).expected
+        let last = try #require(line.departures.last).expected
+        let upcoming = try #require(line.upcoming(at: first.addingTimeInterval(1)))
+        #expect(upcoming.departures.allSatisfy { $0.expected > first })
+        #expect(line.upcoming(at: last.addingTimeInterval(1)) == nil)
+    }
+
     @Test func nearbyGroupsByLineAndDirectionFromTheNearestStop() throws {
         let here = Coordinate(latitude: 51.5308, longitude: -0.1238)
         let lines = try DepartureProvider.parseNearby(ProviderParsingTests.fixture("transitous-nearby"),

@@ -57,7 +57,7 @@ export async function send(env: ApnsEnv, token: string, environment: Environment
   if (reason === "ExpiredProviderToken" || reason === "InvalidProviderToken") {
     await env.DB.prepare("DELETE FROM meta WHERE key = 'apns_jwt' AND value = ?1").bind(sealed).run();
   }
-  const gone = response.status === 410 || reason === "BadDeviceToken" || reason === "DeviceTokenNotForTopic";
+  const gone = response.status === 410 && reason === "Unregistered";
   return { status: response.status, reason, gone };
 }
 

@@ -14,7 +14,8 @@ import { lineCatalog, lineChecks, stationChecks, TfLUnavailable, validateLines }
 import type { Alert, Issue } from "./types.ts";
 import * as valid from "./validate.ts";
 
-const app = new Hono<{ Bindings: Env; Variables: { enrollmentHash: string } }>();
+type AppEnv = { Bindings: Env; Variables: { enrollmentHash: string } };
+const app = new Hono<AppEnv>();
 
 // Whether pushes can go out, so a missing push setting shows; never which values are set.
 app.get("/health", (c) => c.json({ ok: true, pushes: canPush(c.env) }));
@@ -34,7 +35,7 @@ app.use("/v1/*", async (c, next) => {
 // The largest real registration is a few KB; this stops anyone posting megabytes to parse.
 app.use("/v1/*", bodyLimit({ maxSize: 256 * 1024, onError: (c) => c.json({ error: "Too large" }, 413) }));
 
-function ownerHash(c: Context<{ Bindings: Env }>): Promise<string> {
+function ownerHash(c: Context<AppEnv>): Promise<string> {
   return sha256(valid.deviceSecret(c.req.header("x-device-secret")));
 }
 
@@ -58,7 +59,7 @@ export function maxDevices(env: Pick<Env, "MAX_DEVICES">): number {
 }
 
 /** The same enrollment has one edge quota even when many addresses use it. */
-async function limitFetches(c: Context<{ Bindings: Env; Variables: { enrollmentHash: string } }>) {
+async function limitFetches(c: Context<AppEnv>) {
   if (!c.env.STATUS_LIMITER) throw new TfLUnavailable("The alert server is missing its request limiter.");
   if (!(await c.env.STATUS_LIMITER.limit({ key: c.get("enrollmentHash") })).success) throw new TooManyRequests();
 }

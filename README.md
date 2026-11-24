@@ -128,8 +128,9 @@ says how many routes they hid.
 
 ## Build from source
 
-You need a Mac with Xcode 27.2 or later and [XcodeGen](https://github.com/yonaskolb/XcodeGen)
-(`brew install xcodegen`). The Xcode project is generated, not committed.
+The app runs on iOS 26 and later. Build with Xcode 27.2 and [XcodeGen](https://github.com/yonaskolb/XcodeGen)
+(`brew install xcodegen`) on a Mac. The source includes iOS 27.1 fold-aware layout APIs
+behind availability checks. Generate the Xcode project from the checked-in project specification.
 
 1. Clone the repo and run `scripts/generate.sh`. It copies `Config/Secrets.example.xcconfig`
    to `Config/Secrets.xcconfig` (git-ignored) the first time, then writes `Polaris.xcodeproj`.

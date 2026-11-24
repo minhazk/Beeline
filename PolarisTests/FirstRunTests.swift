@@ -39,7 +39,7 @@ struct FirstRunTests {
                 deps.defaults = d
                 deps.secrets = AlertStoreTests.Secrets()
                 deps.builtInURL = nil
-                AlertStore(deps).save(RouteAlert())
+                AlertStore(deps).save(AlertStoreTests.validAlert())
             }),
         ]
         for (what, use) in uses {

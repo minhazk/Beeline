@@ -368,6 +368,29 @@ struct LiveTripTests {
         }
     }
 
+    @MainActor @Test func aLoopNeedsDepartureAndTwoGoodArrivalFixes() {
+        let start = Self.at("06:25:00"), end = start.addingTimeInterval(600)
+        let leg = Leg(mode: .walk, fromName: "A", toName: "A", departure: start, arrival: end,
+                      path: [Self.a, Self.b, Self.a])
+        let journey = Journey(departure: start, arrival: end, legs: [leg], sources: [])
+        let drive = Drive(journey, at: start, boards: [:], fix: Self.a)
+        drive.tick("06:25:00", at: Self.a)
+        drive.tick("06:25:04", at: Self.a)
+        #expect(drive.trip.completion == nil)
+
+        drive.tick("06:27:00", at: Self.b)
+        drive.clock = Self.at("06:32:00")
+        drive.fix = LiveTrip.Fix(coordinate: Self.a, at: start)
+        drive.trip.refresh()
+        drive.fix = LiveTrip.Fix(coordinate: Self.a, at: drive.clock, horizontalAccuracy: 85)
+        drive.trip.refresh()
+        drive.tick("06:32:05", at: Self.a)
+        drive.tick("06:32:08")  // The same fix again.
+        #expect(drive.trip.completion == nil)
+        drive.tick("06:32:10", at: Self.a)
+        #expect(drive.trip.completion == .arrived)
+    }
+
     /// The sample Bakerloo trip: at Paddington ten minutes early, on the 06:30 instead of the
     /// 06:41 with a tap, no fix underground (the phone keeps Paddington's), then out at
     /// Baker Street. Every time downstream follows: the train, the get-off time, the

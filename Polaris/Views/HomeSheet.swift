@@ -2,6 +2,7 @@ import SwiftUI
 
 /// Home: where to, your saved places, and what's leaving near you right now.
 struct HomeSheet: View {
+    @Environment(\.scenePhase) private var scenePhase
     @Environment(PlaceStore.self) private var places
     @Environment(LocationService.self) private var location
     @Environment(DepartureStore.self) private var departures
@@ -114,7 +115,13 @@ struct HomeSheet: View {
             }
             #endif
         }
-        .task(id: location.isAuthorized) { await refreshNearby() }
+        .task(id: nearbyIsVisible) {
+            guard nearbyIsVisible else { return }
+            while !Task.isCancelled {
+                await refreshNearby()
+                do { try await Task.sleep(for: departures.nearbyRefreshDelay) } catch { return }
+            }
+        }
         .paneSheet(item: $picking, id: "home-place") { picking in
             switch picking {
             case .destination:
@@ -243,7 +250,7 @@ struct HomeSheet: View {
                         if index > 0 { Divider().padding(.leading, 12) }
                         Button { alerts.showAlerts = true } label: {
                             HStack {
-                                AlertRow(alert: alert, status: alerts.status[alert.id], compact: true)
+                                AlertRow(alert: alert, status: alerts.status[alert.id], pending: alerts.delivery.pending[alert.id], compact: true)
                                 Spacer(minLength: 8)
                                 Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(.tertiary)
                             }
@@ -309,8 +316,13 @@ struct HomeSheet: View {
         }
     }
 
+    private var nearbyIsVisible: Bool {
+        scenePhase == .active && location.isAuthorized && router.path.isEmpty &&
+            picking == nil && !showSetup && !showSettings && !alerts.showAlerts
+    }
+
     private func refreshNearby(force: Bool = false) async {
-        guard location.isAuthorized, let here = try? await location.current() else { return }
+        guard nearbyIsVisible, let here = try? await location.current(), nearbyIsVisible, !Task.isCancelled else { return }
         await departures.loadNearby(here, force: force)
     }
 
@@ -349,10 +361,11 @@ struct NearbyList: View {
                 case .loaded(let lines) where lines.isEmpty:
                     note("Nothing is leaving from stops within 400 m right now.")
                 case .loaded(let lines):
-                    TimelineView(.periodic(from: .now, by: 30)) { context in
-                        let all = Array(lines.prefix(10))
+                    TimelineView(.periodic(from: .now, by: 15)) { context in
+                        let all = Array(lines.compactMap { $0.upcoming(at: context.date) }.prefix(10))
                         let shown = showAll ? all : Array(all.prefix(collapsedCount))
                         VStack(spacing: 0) {
+                            if all.isEmpty { note("No upcoming departures in the latest board.") }
                             ForEach(Array(shown.enumerated()), id: \.element.id) { index, line in
                                 if index > 0 { Divider().padding(.leading, 12) }
                                 NavigationLink(value: Page.line(line)) {

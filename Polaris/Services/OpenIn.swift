@@ -1,5 +1,16 @@
 import UIKit
 
+extension TimeMode {
+    /// Public directions links open the endpoints. The receiving app controls its journey time.
+    var handoffTimeReminder: String? {
+        switch self {
+        case .leaveNow: nil
+        case .departAt(let date): "Set departure to \(date.formatted(date: .abbreviated, time: .shortened)) in the other app."
+        case .arriveBy(let date): "Check the arrival time is \(date.formatted(date: .abbreviated, time: .shortened)) in the other app."
+        }
+    }
+}
+
 /// Hand the same trip to another app: the one-tap second opinion for apps
 /// (Citymapper above all) that have no API to ask directly.
 enum OpenIn: String, CaseIterable, Identifiable {

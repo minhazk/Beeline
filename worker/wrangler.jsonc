@@ -3,7 +3,8 @@
   "name": "beeline-alerts",
   "main": "src/index.ts",
   "compatibility_date": "2026-10-01",
-  "observability": { "enabled": true, "head_sampling_rate": 1 },
+  // Device endpoints include the APNs token in the path. Keep application diagnostics only.
+  "observability": { "enabled": true, "logs": { "enabled": true, "invocation_logs": false } },
   // Your own deployment's values (a custom-domain "routes" entry, the D1 database_id, the
   // APNs team and topic) go in wrangler.local.jsonc, git-ignored, which `pnpm run deploy`,
   // `pnpm run migrate` and `pnpm run dev` lay over this file (scripts/wrangler.mjs).

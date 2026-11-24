@@ -130,8 +130,8 @@ struct NetworkStatus: Sendable {
                                            detail: line.reason, severity: severity, source: .tfl, leg: leg.id))
             }
         }
-        var seen = Set<String>()
-        return found.filter { seen.insert($0.title + $0.detail).inserted }
+        var seen = Set<ServiceNotice.DisplayID>()
+        return found.filter { seen.insert($0.displayID).inserted }
     }
 
     /// How much a line status matters to a route on that line; nil when it doesn't.

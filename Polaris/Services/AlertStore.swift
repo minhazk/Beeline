@@ -12,8 +12,13 @@ final class AlertStore {
     static let shared = AlertStore()
 
     private(set) var alerts: [RouteAlert] {
-        didSet { save() }
+        didSet {
+            delivery = RouteAlert.Delivery(alerts)
+            save()
+        }
     }
+    private(set) var delivery: RouteAlert.Delivery
+    var canAddWatch: Bool { alerts.count < RouteAlert.maxAlerts }
 
     /// What TfL says about each alert, by id, from the server.
     private(set) var status: [String: AlertStatus.Entry] = [:]
@@ -95,7 +100,9 @@ final class AlertStore {
 
     init(_ deps: Dependencies = Dependencies()) {
         self.deps = deps
-        alerts = deps.defaults.data(forKey: "alerts").flatMap { try? JSONDecoder().decode([RouteAlert].self, from: $0) } ?? []
+        let saved = deps.defaults.data(forKey: "alerts").flatMap { try? JSONDecoder().decode([RouteAlert].self, from: $0) } ?? []
+        alerts = saved
+        delivery = RouteAlert.Delivery(saved)
         token = deps.defaults.string(forKey: "alerts.token")
         registered = deps.defaults.string(forKey: "alerts.registered")
         needsUnregister = deps.defaults.bool(forKey: "alerts.needsUnregister")
@@ -213,7 +220,7 @@ final class AlertStore {
                 if !updated.removals.contains(removal) { updated.removals.append(removal) }
             }
         }
-        if let next, !alerts.isEmpty {
+        if let next, !delivery.ready.isEmpty {
             updated.removals.removeAll { $0.server.url == next.url && $0.pushToken == token }
         }
         guard persist(updated) else { throw .cannotSave }
@@ -234,7 +241,7 @@ final class AlertStore {
         cleanupProblem = nil
         await oldSync?.value
         let note = await retryRemovals()?.value
-        if next != nil, !alerts.isEmpty {
+        if next != nil, !delivery.ready.isEmpty {
             await enablePush()
             sync()
             await refreshStatus(force: true)
@@ -251,7 +258,7 @@ final class AlertStore {
             for removal in choice.removals {
                 // A built-in address can also change between releases. The active registration
                 // is reconciled by sync(), never by a cleanup job from a previous launch.
-                if removal.server.url != server?.url || removal.pushToken != token || alerts.isEmpty {
+                if removal.server.url != server?.url || removal.pushToken != token || delivery.ready.isEmpty {
                     do {
                         try await send("DELETE", path: "devices/\(removal.pushToken)", to: removal.server)
                     } catch {
@@ -276,7 +283,16 @@ final class AlertStore {
 
     // MARK: Editing
 
-    func save(_ alert: RouteAlert) {
+    func saveProblem(for alert: RouteAlert) -> String? {
+        if !alerts.contains(where: { $0.id == alert.id }) && !canAddWatch { return "Remove a watch before adding another. The limit is 30." }
+        // An edit must leave room for all the other watches that are already being delivered.
+        var remaining = delivery.ready.contains { $0.id == alert.id }
+            ? RouteAlert.Delivery(delivery.ready.filter { $0.id != alert.id }) : delivery
+        return remaining.include(alert)
+    }
+
+    @discardableResult func save(_ alert: RouteAlert) -> Bool {
+        guard saveProblem(for: alert) == nil else { return false }
         if let index = alerts.firstIndex(where: { $0.id == alert.id }) { alerts[index] = alert } else { alerts.append(alert) }
         status[alert.id] = nil
         needsUnregister = false
@@ -285,10 +301,11 @@ final class AlertStore {
             await refreshStatus(force: true)
         }
         sync()
+        return true
     }
 
     func delete(_ id: RouteAlert.ID) {
-        if alerts.count == 1, alerts.first?.id == id, token != nil || registered != nil {
+        if delivery.ready.count == 1, delivery.ready.first?.id == id, token != nil || registered != nil {
             needsUnregister = true
         }
         alerts.removeAll { $0.id == id }
@@ -300,7 +317,7 @@ final class AlertStore {
 
     /// Asks once, then registers for a token on every launch (it can change).
     func enablePush() async {
-        guard !alerts.isEmpty, currentServer() != nil else { return }
+        guard !delivery.ready.isEmpty, currentServer() != nil else { return }
         permission = await deps.registerForPush()
     }
 
@@ -325,7 +342,7 @@ final class AlertStore {
             _ = await cleanup?.value
             guard !Task.isCancelled, let server = currentServer() else { return }
             do {
-                if alerts.isEmpty {
+                if delivery.ready.isEmpty {
                     let tokens = Set([registered, token].compactMap { $0 })
                     for previous in tokens {
                         try Task.checkCancellation()
@@ -339,16 +356,17 @@ final class AlertStore {
                     if let old = registered, old != token { try await send("DELETE", path: "devices/\(old)", to: server) }
                     try Task.checkCancellation()
                     let body = RouteAlert.Registration(environment: Self.environment, timeZone: TimeZone.current.identifier,
-                                                       alerts: alerts.map(RouteAlert.Wire.init))
+                                                       alerts: delivery.ready.map(RouteAlert.Wire.init))
                     try await send("PUT", path: "devices/\(token)", body: JSONEncoder().encode(body), to: server)
                     try Task.checkCancellation()
                     registered = token
                 }
                 syncProblem = nil
             } catch is CancellationError {
+            } catch let error as URLError where error.code == .cancelled {
             } catch {
                 guard !Task.isCancelled else { return }
-                syncProblem = (error as? AlertError)?.credentialProblem ?? "Couldn't reach the alert server, so notifications may be out of date. It tries again next time you open the app."
+                syncProblem = (error as? AlertError)?.message ?? "Couldn't reach the alert server, so notifications may be out of date. It tries again next time you open the app."
             }
         }
     }
@@ -358,7 +376,7 @@ final class AlertStore {
         let active = currentServer()
         if !changingServer { _ = retryRemovals() }
         guard active != nil else { return }
-        if alerts.isEmpty {
+        if delivery.ready.isEmpty {
             if registered != nil || needsUnregister { sync() }
             return
         }
@@ -376,7 +394,7 @@ final class AlertStore {
         } catch AlertError.server(let message) {
             return message
         } catch {
-            return (error as? AlertError)?.credentialProblem ?? "Couldn't reach the alert server."
+            return (error as? AlertError)?.message ?? "Couldn't reach the alert server."
         }
     }
 
@@ -384,21 +402,30 @@ final class AlertStore {
 
     /// What TfL says now, at most once a minute.
     func refreshStatus(force: Bool = false) async {
-        guard !alerts.isEmpty, let server = currentServer() else { return }
-        if !force, let checkedAt, Date.now.timeIntervalSince(checkedAt) < 60, Set(status.keys) == Set(alerts.map(\.id)) { return }
+        guard let server = currentServer() else { return }
+        let watched = delivery.ready
+        guard !watched.isEmpty else {
+            statusTask?.cancel()
+            status = [:]
+            checkedAt = nil
+            statusProblem = nil
+            return
+        }
+        if !force, let checkedAt, Date.now.timeIntervalSince(checkedAt) < 60, Set(status.keys) == Set(watched.map(\.id)) { return }
         statusTask?.cancel()
         let task = Task {
             do {
                 struct Body: Encodable { var alerts: [RouteAlert.Wire]; var timeZone: String }
-                let body = try JSONEncoder().encode(Body(alerts: alerts.map(RouteAlert.Wire.init), timeZone: TimeZone.current.identifier))
+                let body = try JSONEncoder().encode(Body(alerts: watched.map(RouteAlert.Wire.init), timeZone: TimeZone.current.identifier))
                 let result = try AlertStatus.decode(try await send("POST", path: "status", body: body, to: server))
                 guard !Task.isCancelled else { return }
                 status = Dictionary(result.alerts.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
                 checkedAt = result.checkedAt
                 statusProblem = nil
             } catch is CancellationError {
+            } catch let error as URLError where error.code == .cancelled {
             } catch {
-                if !Task.isCancelled { statusProblem = "Couldn't check TfL just now." }
+                if !Task.isCancelled { statusProblem = (error as? AlertError)?.message ?? "Couldn't check TfL just now." }
             }
         }
         statusTask = task
@@ -410,8 +437,9 @@ final class AlertStore {
     enum AlertError: Error {
         case server(String), keychainLocked, randomUnavailable, tooLarge
 
-        var credentialProblem: String? {
+        var message: String? {
             switch self {
+            case .server(let message): message
             case .keychainLocked: "Couldn't access this phone's alert credential in the Keychain. Unlock the phone and try again."
             case .randomUnavailable: "Couldn't generate a secure credential for this phone. Try again."
             default: nil

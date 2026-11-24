@@ -31,8 +31,28 @@ final class Router {
         // Brought the pane back up wide open: folding then shows the sheet, not the bar it was.
         if foldX != nil, rest != Self.low, foldedDetent == Self.low { foldedDetent = .medium }
     }
+    struct TripNotice: Identifiable {
+        let id = UUID()
+        let reason: LiveTrip.Completion
+        let destination: String
+    }
+    var tripNotice: TripNotice?
+
     var trip: LiveTrip? {
-        didSet { poseChanged() }
+        didSet {
+            guard oldValue !== trip else { return }
+            oldValue?.onCompletion = nil
+            oldValue?.stop()
+            if let trip {
+                tripNotice = nil
+                trip.onCompletion = { [weak self, weak trip] reason in
+                    guard let self, let trip, self.trip === trip else { return }
+                    self.tripNotice = TripNotice(reason: reason, destination: trip.query.destination.name)
+                    self.endTrip()
+                }
+            }
+            poseChanged()
+        }
     }
 
     /// Where the fold runs across the window, turned tall on a Duo; nil everywhere else.
@@ -161,7 +181,6 @@ final class Router {
     }
 
     func endTrip() {
-        trip?.stop()
         trip = nil
         settle(.medium)
     }

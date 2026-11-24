@@ -38,13 +38,19 @@ struct AlertStoreTests {
 
     static let pushToken = String(repeating: "ab", count: 32)
 
+    static func validAlert() -> RouteAlert {
+        var alert = RouteAlert()
+        alert.segments = [.init(line: .init(id: "central", name: "Central"), mode: "tube")]
+        return alert
+    }
+
     func store(secrets: Secrets = Secrets(), wire: Wire = Wire(), registered: Bool = true,
                builtIn: (String, String)? = ("https://built.example.com", "built-token"),
                defaults existingDefaults: UserDefaults? = nil) -> AlertStore {
         let name = "AlertStoreTests.\(UUID().uuidString)"
         let defaults = existingDefaults ?? UserDefaults(suiteName: name)!
         if defaults.object(forKey: "alerts") == nil {
-            defaults.set(try! JSONEncoder().encode([RouteAlert()]), forKey: "alerts")
+            defaults.set(try! JSONEncoder().encode([Self.validAlert()]), forKey: "alerts")
             defaults.set(Self.pushToken, forKey: "alerts.token")
             if registered { defaults.set(Self.pushToken, forKey: "alerts.registered") }
         }
@@ -75,6 +81,51 @@ struct AlertStoreTests {
         let oldSecret = old.first?.value(forHTTPHeaderField: "X-Device-Secret")
         let newSecret = new.first { $0.httpMethod == "PUT" }?.value(forHTTPHeaderField: "X-Device-Secret")
         #expect(oldSecret != nil && newSecret != nil && oldSecret != newSecret, "each server its own secret")
+    }
+
+    @Test func oversizedLegacyWatchesStayLocalAndValidWatchesStillSync() async throws {
+        var old = Self.validAlert()
+        old.name = String(repeating: "😀", count: 61)
+        let valid = Self.validAlert()
+        let defaults = UserDefaults(suiteName: "PendingAlertTests.\(UUID().uuidString)")!
+        defaults.set(try JSONEncoder().encode([old, valid]), forKey: "alerts")
+        let wire = Wire(), store = store(wire: wire, defaults: defaults)
+        #expect(store.delivery.pending[old.id] != nil)
+        #expect(store.alerts == [old, valid])
+        store.didRegister(Data(repeating: 0xab, count: 32))
+        await store.waitForSync()
+        await store.refreshStatus(force: true)
+        struct Payload: Decodable { var alerts: [RouteAlert] }
+        #expect(wire.requests.count == 2)
+        for request in wire.requests {
+            let body = try #require(request.httpBody)
+            #expect(try JSONDecoder().decode(Payload.self, from: body).alerts.map(\.id) == [valid.id])
+        }
+        #expect(!store.save(old))
+        old.name = String(repeating: "😀", count: 60)
+        #expect(store.save(old))
+        #expect(store.delivery.ready.map(\.id) == [old.id, valid.id])
+        await store.waitForSync()
+    }
+
+    @Test func limitsApplyAcrossAFullCollectionAndToEditedDrafts() throws {
+        let alerts = (0..<30).map { _ in Self.validAlert() }
+        let defaults = UserDefaults(suiteName: "FullAlertTests.\(UUID().uuidString)")!
+        defaults.set(try JSONEncoder().encode(alerts), forKey: "alerts")
+        let store = store(defaults: defaults)
+        #expect(!store.canAddWatch && !store.save(Self.validAlert()))
+        var edit = alerts[0]
+        #expect(store.saveProblem(for: edit) == nil)
+        edit.windows = Array(repeating: edit.windows[0], count: 9)
+        #expect(!store.save(edit))
+        edit.windows.removeLast()
+        edit.segments = Array(repeating: edit.segments[0], count: 9)
+        #expect(!store.save(edit))
+        edit.segments.removeLast()
+        #expect(store.saveProblem(for: edit) == nil)
+        #expect(store.alerts == alerts)
+        let legacy = RouteAlert.Delivery(alerts + [Self.validAlert()])
+        #expect(legacy.ready.count == 30 && legacy.pending.count == 1)
     }
 
     @Test func aFailedRemovalIsSaid() async throws {

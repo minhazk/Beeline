@@ -17,5 +17,5 @@ xcuserdata/
 # --- local review material ---
 screenshots/
 
-# Local Claude Code settings
-/.claude/settings.local.json
+# Local Claude Code state
+/.claude/

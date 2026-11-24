@@ -18,6 +18,11 @@ final class DepartureStore {
     private var fetched: [UUID: Date] = [:]
     private(set) var nearby: Loadable<[NearbyLine]>?
     private var nearbyFetched: (at: Date, around: Coordinate)?
+    private var nearbyRequest: (id: UUID, around: Coordinate)?
+    var nearbyRefreshDelay: Duration {
+        let remaining = nearbyFetched.map { Self.freshFor - Date.now.timeIntervalSince($0.at) } ?? 0
+        return .seconds(remaining > 0 ? remaining : Self.freshFor)
+    }
 
     static let freshFor: TimeInterval = 60
 
@@ -44,14 +49,22 @@ final class DepartureStore {
         #if DEBUG
         if Demo.offline { return }
         #endif
-        if !force, let last = nearbyFetched, Date.now.timeIntervalSince(last.at) < Self.freshFor,
+        if !force, nearby?.value != nil, let last = nearbyFetched, Date.now.timeIntervalSince(last.at) < Self.freshFor,
            last.around.distance(to: coordinate) < 150 { return }
-        nearbyFetched = (.now, coordinate)
+        if force, let pending = nearbyRequest, pending.around.distance(to: coordinate) < 150 { return }
+        let requestID = UUID()
+        nearbyRequest = (requestID, coordinate)
+        defer { if nearbyRequest?.id == requestID { nearbyRequest = nil } }
+        if let last = nearbyFetched, last.around.distance(to: coordinate) >= 150 { nearby = .loading }
         if nearby?.value == nil { nearby = .loading }
         do {
-            nearby = .loaded(try await provider.nearby(coordinate))
+            let lines = try await provider.nearby(coordinate)
+            guard nearbyRequest?.id == requestID, !Task.isCancelled else { return }
+            nearbyFetched = (.now, coordinate)
+            nearby = .loaded(lines)
         } catch {
-            if nearby?.value == nil { nearby = .failed(Self.describe(error)) }
+            guard nearbyRequest?.id == requestID, !Task.isCancelled else { return }
+            nearby = .failed(Self.describe(error))
             nearbyFetched = nil
         }
     }

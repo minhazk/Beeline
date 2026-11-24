@@ -31,6 +31,7 @@ struct TripRestoreTests {
         var boards: [UUID: DepartureBoard]
         let alerts = T.RecordedAlerts()
         let activity = RecordedActivity()
+        let location = LocationService()
         var loaded: [UUID] = []
         let store: TripStore
         var trip: LiveTrip!
@@ -41,7 +42,7 @@ struct TripRestoreTests {
             self.boards = boards
             self.fix = fix
             self.store = store
-            trip = LiveTrip(resuming: saved, location: LocationService(), departures: DepartureStore(),
+            trip = LiveTrip(resuming: saved, location: location, departures: DepartureStore(),
                             clock: { [weak self] in self?.clock ?? time }, fix: { [weak self] in self?.fix },
                             boards: { [weak self] in self?.boards[$0.id] }, loadBoard: { [weak self] in self?.loaded.append($0.id) },
                             routeWalk: { _, _ in nil }, alerts: alerts, search: search, isOnline: { true },
@@ -206,6 +207,8 @@ struct TripRestoreTests {
         let reopened = Reopened(try #require(store.load()), at: Self.at("07:20:00"), boards: T.bakerlooBoards(journey),
                                 fix: nil, store: store)
         let trip = reopened.trip!
+        let router = Router()
+        router.resume(trip)
         trip.start()
         // No fix yet: the clock alone ends the Bakerloo; the change walk waits to be seen.
         #expect(trip.legIndex == 2)
@@ -215,7 +218,32 @@ struct TripRestoreTests {
         #expect(trip.log.ended[3] == Self.at("07:03:00"))
         #expect(reopened.alerts.pending.isEmpty)
         #expect(reopened.activity.starts == [true])
-        trip.stop()
+        reopened.tick("07:20:06", at: T.canadaSquare)
+        reopened.tick("07:20:10", at: T.canadaSquare)
+        #expect(router.trip == nil)
+        #expect(router.tripNotice?.reason == .arrived)
+        #expect(router.tripNotice?.destination == saved.query.destination.name)
+        #expect(!reopened.location.isTracking)
+        #expect(reopened.activity.ended == 1)
+        #expect(!store.exists)
+        reopened.tick("07:20:12", at: T.canadaSquare)
+        #expect(!store.exists && reopened.activity.ended == 1)
+    }
+
+    @Test func aTripLeftRunningWithoutLocationExpiresWithoutClaimingArrival() throws {
+        let store = Self.store()
+        defer { store.clear() }
+        let (saved, journey) = try Self.savedOnTheEarlyBakerloo(store: store)
+        let reopened = Reopened(saved, at: Self.at("06:35:00"), boards: [:], fix: nil, store: store)
+        let trip = reopened.trip!
+        let router = Router()
+        router.resume(trip)
+        trip.start()
+        reopened.clock = journey.arrival.addingTimeInterval(LiveTrip.expiryGrace + 1)
+        trip.refresh()
+        #expect(router.tripNotice?.reason == .expired)
+        #expect(router.trip == nil && !reopened.location.isTracking)
+        #expect(!store.exists && reopened.alerts.pending.isEmpty && reopened.activity.ended == 1)
     }
 
     /// Opened 20 seconds before "Get off at Baker Street": the alert handed over before Polaris
