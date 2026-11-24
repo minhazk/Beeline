@@ -1,5 +1,6 @@
 import ActivityKit
 import SwiftUI
+import UIKit
 import WidgetKit
 
 @main
@@ -15,8 +16,8 @@ struct TripLiveActivity: Widget {
     var body: some WidgetConfiguration {
         ActivityConfiguration(for: TripActivityAttributes.self) { context in
             LockScreenTrip(state: context.state, destination: context.attributes.destination, isStale: context.isStale)
-                .activityBackgroundTint(Palette.paper)
-                .activitySystemActionForegroundColor(Palette.ink)
+                .activityBackgroundTint(Palette.background)
+                .activitySystemActionForegroundColor(Palette.label)
         } dynamicIsland: { context in
             let state = context.state
             return DynamicIsland {
@@ -70,19 +71,25 @@ struct TripLiveActivity: Widget {
             } minimal: {
                 StepIcon(state: state, size: 22)
             }
-            .keylineTint(Palette.gold)
+            .keylineTint(Palette.accent)
         }
     }
 }
 
 /// Trip colours for the Lock Screen and Dynamic Island, which are rendered outside the app.
 private enum Palette {
-    static let paper = Color(red: 0.043, green: 0.059, blue: 0.110)
-    static let ink = Color(red: 0.914, green: 0.929, blue: 0.965)
-    static let navy = Color(red: 0.051, green: 0.082, blue: 0.188)
-    static let gold = Color(red: 0.949, green: 0.722, blue: 0.180)
-    static let here = Color(red: 0.184, green: 0.435, blue: 0.922)
-    static let warning = Color(red: 1.0, green: 0.561, blue: 0.353)
+    static let background = dark(.secondarySystemBackground)
+    static let label = dark(.label)
+    static let secondaryLabel = dark(.secondaryLabel)
+    static let accent = dark(.systemBlue)
+    static let warning = dark(.systemOrange)
+
+    private static func dark(_ color: UIColor) -> Color {
+        Color(uiColor: UIColor { traits in
+            let darkTraits = traits.modifyingTraits { $0.userInterfaceStyle = .dark }
+            return color.resolvedColor(with: darkTraits)
+        })
+    }
 
     static func line(_ hex: String?) -> Color? {
         rgb(hex).map { Color(red: $0.r, green: $0.g, blue: $0.b) }
@@ -111,20 +118,20 @@ private struct LockScreenTrip: View {
                 StepIcon(state: state, size: 44)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(state.title).font(.headline).lineLimit(2)
-                    Text(state.detail).font(.subheadline).foregroundStyle(Palette.ink.opacity(0.65)).lineLimit(2)
+                    Text(state.detail).font(.subheadline).foregroundStyle(Palette.secondaryLabel).lineLimit(2)
                 }
                 .layoutPriority(1)
                 Spacer(minLength: 4)
                 // How long you have, and what it costs you if that isn't enough:
                 // together they say whether to run or there's time for a coffee.
                 VStack(alignment: .trailing, spacing: 0) {
-                    Text(state.countdownLabel).font(.caption).foregroundStyle(Palette.ink.opacity(0.65))
+                    Text(state.countdownLabel).font(.caption).foregroundStyle(Palette.secondaryLabel)
                     Countdown(to: state.countdownTo).font(.title3.weight(.semibold))
                     if !isStale, let cost = state.missCostText {
-                        Text("If missed").font(.caption).foregroundStyle(Palette.ink.opacity(0.65)).padding(.top, 3)
+                        Text("If missed").font(.caption).foregroundStyle(Palette.secondaryLabel).padding(.top, 3)
                         Text(cost)
                             .font(.subheadline.weight(.semibold))
-                            .foregroundStyle(state.missIsCostly ? Palette.warning : Palette.ink)
+                            .foregroundStyle(state.missIsCostly ? Palette.warning : Palette.label)
                     }
                 }
                 .lineLimit(1)
@@ -133,19 +140,19 @@ private struct LockScreenTrip: View {
             VStack(alignment: .leading, spacing: 3) {
                 // Why it costs what it does.
                 if !isStale, let detail = state.missDetail {
-                    Text(detail).fontWeight(.medium).foregroundStyle(Palette.ink).minimumScaleFactor(0.85)
+                    Text(detail).fontWeight(.medium).foregroundStyle(Palette.label).minimumScaleFactor(0.85)
                 }
                 HStack(spacing: 6) {
                     Text(isStale ? "Open Beeline Home to update" : "Step \(state.step) of \(state.stepCount)")
                     Spacer(minLength: 4)
                     Text("\(destination) at \(state.arrival, format: .dateTime.hour().minute())")
                 }
-                .foregroundStyle(Palette.ink.opacity(0.65))
+                .foregroundStyle(Palette.secondaryLabel)
             }
             .lineLimit(1)
             .font(.footnote)
         }
-        .foregroundStyle(Palette.ink)
+        .foregroundStyle(Palette.label)
         .padding(16)
     }
 }
@@ -157,10 +164,10 @@ private struct StepIcon: View {
 
     var body: some View {
         // Walks take the blue that marks you on the map.
-        let fill = Palette.line(state.lineColor) ?? Palette.here
+        let fill = Palette.line(state.lineColor) ?? Palette.accent
         Image(systemName: state.symbol)
             .font(.system(size: size * 0.48, weight: .semibold))
-            .foregroundStyle(Palette.isPale(state.lineColor) ? Palette.navy : .white)
+            .foregroundStyle(Palette.isPale(state.lineColor) ? Color.black : .white)
             .frame(width: size, height: size)
             .background(fill, in: .circle)
             .overlay(Circle().strokeBorder(.white.opacity(0.5), lineWidth: 1))

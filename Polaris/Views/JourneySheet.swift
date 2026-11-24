@@ -50,7 +50,6 @@ struct JourneySheet: View {
         // On the Duo's cover during Go the column beside the sheet holds nothing (Go has no bar),
         // so below the clock the sheet's content runs the whole width.
         .ignoresSafeArea(.container, edges: usesColumn ? .trailing : [])
-        .background(Theme.paper)
         .navigationTitle(query.destination.name)
         .lowRestBar {
             // Wide open, put away: Go's own top row is the bar, as the navigation bar is otherwise.
@@ -157,11 +156,10 @@ struct JourneySheet: View {
                 Button(action: start) {
                     Label("Go", systemImage: "location.north.fill")
                         .font(.headline)
-                        .foregroundStyle(Theme.navy)
                         .frame(maxWidth: .infinity, minHeight: 36)
                 }
                 .buttonStyle(.glassProminent)
-                .tint(Theme.gold)
+                .tint(Theme.tint)
                 .accessibilityHint("Follows you along the journey with live walking directions")
 
                 ShareLink(item: shareText) {
@@ -367,7 +365,7 @@ private struct LegRow: View {
                             Text(typeSize.isAccessibilitySize ? "\(departure.clock) \(fromName)" : fromName)
                                 .font(.subheadline.weight(.semibold))
                             if state == .current {
-                                Text("Now").font(.caption.weight(.bold)).foregroundStyle(Theme.goldInk)
+                                Text("Now").font(.caption.weight(.bold)).foregroundStyle(Theme.tint)
                             }
                         }
                         if leg.mode.isTransit { transitTitle } else { walkTitle }
@@ -404,7 +402,7 @@ private struct LegRow: View {
     private var rail: some View {
         VStack(spacing: 0) {
             Circle()
-                .fill(state == .current ? Theme.gold : Theme.surface)
+                .fill(state == .current ? Theme.tint : Theme.surface)
                 .stroke(leg.mode.isTransit ? color : Theme.ink.opacity(0.35), lineWidth: 2.5)
                 .frame(width: 13, height: 13)
             if leg.mode.isTransit {

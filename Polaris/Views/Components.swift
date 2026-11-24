@@ -23,7 +23,7 @@ struct LinePill: View {
             if let line { Text(Self.shortName(line)).lineLimit(1) }
         }
         .font((compact ? Font.caption : .footnote).weight(.semibold))
-        .foregroundStyle(luminance < 0.6 ? Color.white : Theme.navy)
+        .foregroundStyle(luminance < 0.6 ? Color.white : Color.black)
         .padding(.horizontal, compact ? 6 : 8)
         .frame(minHeight: compact ? 20 : 24)
         .background(color.map(Color.init) ?? .gray, in: .rect(cornerRadius: 6))

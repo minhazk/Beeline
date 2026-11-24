@@ -29,7 +29,7 @@ struct GuidanceBanner: View {
                     .font(.headline)
                     .lineLimit(router.isNarrow ? 3 : 2)
                 if let offer = trip.offerMessage {
-                    // A faster way takes the last line, in gold: the whole line where it fits, the
+                    // A faster way takes the last line: the whole line where it fits, the
                     // gain and the time where the banner is narrow (beside the cover's clock).
                     ViewThatFits(in: .horizontal) {
                         Label(offer.short, systemImage: "sparkle").fixedSize()
@@ -37,7 +37,7 @@ struct GuidanceBanner: View {
                         Label(offer.compact, systemImage: "sparkle").lineLimit(1).minimumScaleFactor(0.8)
                     }
                     .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(Theme.gold)
+                    .foregroundStyle(Theme.tint)
                 } else if let then = then(leg) {
                     // Two lines on a narrow window, so the platform at its end isn't cut.
                     Text(then).font(.subheadline).foregroundStyle(.white.opacity(0.75)).lineLimit(router.isNarrow ? 2 : 1)
@@ -48,7 +48,7 @@ struct GuidanceBanner: View {
         .foregroundStyle(.white)
         .padding(.horizontal, 18)
         .padding(.vertical, 14)
-        .background(Theme.banner, in: .rect(cornerRadius: 24))
+        .background(Theme.paper, in: .rect(cornerRadius: 24))
         .overlay(RoundedRectangle(cornerRadius: 24).strokeBorder(Theme.hairline, lineWidth: 0.5))
         .shadow(color: .black.opacity(0.2), radius: 10, y: 4)
         .padding(.horizontal, 10)
@@ -64,7 +64,7 @@ struct GuidanceBanner: View {
         Group {
             if leg.mode.isTransit {
                 Image(systemName: leg.mode.symbol)
-                    .foregroundStyle((leg.lineColor?.luminance ?? 0) < 0.6 ? Color.white : Theme.navy)
+                    .foregroundStyle((leg.lineColor?.luminance ?? 0) < 0.6 ? Color.white : Color.black)
                     .background(Circle().fill(leg.lineColor.map(Color.init) ?? .gray).frame(width: 50, height: 50))
                     .overlay(Circle().strokeBorder(.white.opacity(0.6), lineWidth: 1.5).frame(width: 50, height: 50))
             } else {

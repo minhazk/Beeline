@@ -33,7 +33,7 @@ enum Demo {
     }()
     /// No searches, boards, nearby departures or buses: the canned trip carries its own boards.
     static var offline: Bool { replan != nil }
-    static let origin = Place(name: "King's Cross", coordinate: .init(latitude: 51.5308, longitude: -0.1238))
-    static let destination = Place(name: "Canary Wharf", coordinate: .init(latitude: 51.5035, longitude: -0.0187))
+    static let origin = JourneyQuery.londonExample.origin
+    static let destination = JourneyQuery.londonExample.destination
 }
 #endif

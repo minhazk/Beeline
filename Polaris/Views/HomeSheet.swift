@@ -12,14 +12,15 @@ struct HomeSheet: View {
 
     @State private var picking: Picking?
     @State private var showSettings = false
-    /// The setup step, on a new install's first launch only (`FirstRun`).
+    @ScaledMetric(relativeTo: .body) private var shortcutSize: CGFloat = 76
+    @State private var offersSetup = false
     @State private var showSetup = false
     @State private var tookFirstRunTurn = false
     @State private var stranded: Place?
     @State private var didDemo = false
 
     enum Picking: Identifiable {
-        case destination, home, work
+        case destination, home, work, favorite
         case origin(for: Place)
 
         var id: String {
@@ -27,6 +28,7 @@ struct HomeSheet: View {
             case .destination: "destination"
             case .home: "home"
             case .work: "work"
+            case .favorite: "favorite"
             case .origin(let place): "origin-\(place.id)"
             }
         }
@@ -34,48 +36,23 @@ struct HomeSheet: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                // Where the system keeps its bars in a column at the side (the Duo's cover), a
-                // hidden bar leaves that column empty and the header costs a row. Settings goes
-                // in the column there, and the star beside the search field.
-                if router.barIsBeside {
-                    HStack(spacing: 10) {
-                        FractalStar(size: 26)
-                        searchField
-                    }
-                } else {
-                    header
-                    searchField
-                }
+            VStack(alignment: .leading, spacing: 20) {
+                searchRow
                 savedPlaces
-                // What you set up and come back to (your lines' problems, recents) comes first;
-                // "Leaving near you" is a nice extra, so it sits last and shows only a few rows.
-                // (It once led, as the on-the-move answer; that took too much room above them.)
                 yourLines
-                recents
+                if places.recents.isEmpty { exampleJourney } else { recents }
                 nearby
+                if offersSetup {
+                    Button("Set up optional services", systemImage: "gearshape") { showSetup = true }
+                        .font(.subheadline)
+                }
             }
             .padding(.horizontal, 16)
-            .padding(.top, 18)
+            .padding(.top, 16)
             .padding(.bottom, 30)
         }
         .scrollIndicators(.hidden)
-        .background(Theme.paper)
-        // Put away, the bar is where to: the search field, whatever the list was scrolled to.
-        // Put away, the bar is where to: the star, the search field and Settings on one line,
-        // whatever the list was scrolled to. On the cover Settings leaves the system's column for
-        // the bar, where the column's own button sat 17 pt above the field's line; it keeps the
-        // column's place, in the card's rounded end.
-        .lowRestBar {
-            HStack(spacing: 10) {
-                FractalStar(size: 26)
-                searchField
-                settingsButton
-                    .padding(.leading, router.barIsBeside ? 8 : 0)
-            }
-            .padding(.leading, 16)
-            .padding(.trailing, router.barIsBeside ? LowBar.endInset : 16)
-        }
+        .lowRestBar { searchRow.padding(.horizontal, 16) }
         .toolbar(router.barIsBeside ? .visible : .hidden, for: .navigationBar)
         .toolbar {
             // Put away, Settings is in the bar, on the field's line.
@@ -88,13 +65,17 @@ struct HomeSheet: View {
         .onAppear {
             router.pageAppeared()
             // Under a page already (a trip picked up at launch): that page has the map.
-            // A new install sees the setup step first, and is asked for location after it: until
-            // then nothing on the map or the page asks (MapKit would, for a camera on the user).
-            if !tookFirstRunTurn, firstRunTurn() {
-                showSetup = true
-                scene.mayUseLocation = false
+            if !tookFirstRunTurn {
+                if router.path.isEmpty, router.foldX == nil, router.foldY == nil, !router.isShort {
+                    router.settle(.medium)
+                }
+                offersSetup = firstRunTurn()
+                #if DEBUG
+                showSetup = ProcessInfo.processInfo.arguments.contains("-setup")
+                #endif
+                tookFirstRunTurn = true
             }
-            tookFirstRunTurn = true
+            scene.mayUseLocation = !showSetup
             if router.path.isEmpty { scene.showHome() }
             if !showSetup { location.requestPermission() }
             #if DEBUG
@@ -130,6 +111,8 @@ struct HomeSheet: View {
                 PlaceSearchView(title: "Start from", allowsCurrentLocation: false) { go(to: destination, from: $0) }
             case .home:
                 PlaceSearchView(title: "Set Home", allowsCurrentLocation: false) { places.home = $0 }
+            case .favorite:
+                PlaceSearchView(title: "Add a place", allowsCurrentLocation: false) { places.addFavorite($0) }
             case .work:
                 PlaceSearchView(title: "Set Work", allowsCurrentLocation: false) { places.work = $0 }
             }
@@ -138,6 +121,7 @@ struct HomeSheet: View {
         .paneSheet(isPresented: $showSetup, id: "setup") { SetupView() }
         .onChange(of: showSetup) { _, shown in
             guard !shown else { return }
+            offersSetup = false
             scene.mayUseLocation = true
             if router.path.isEmpty { scene.showHome() }
             location.requestPermission()
@@ -155,23 +139,21 @@ struct HomeSheet: View {
         }
     }
 
-    private var header: some View {
-        HStack(spacing: 10) {
-            FractalStar(size: 26)
-            Text("Beeline Home").font(Theme.title(.title2))
-            Spacer()
-            settingsButton
+    private var searchRow: some View {
+        HStack(spacing: 8) {
+            searchField
+            if !router.barIsBeside || router.detent == Router.low {
+                Button { showSettings = true } label: {
+                    Image(systemName: "gearshape.fill")
+                        .font(.title3.weight(.semibold))
+                        .foregroundStyle(.white)
+                        .frame(width: 44, height: 44)
+                        .background(Color(uiColor: .systemGray).gradient, in: .circle)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Settings")
+            }
         }
-    }
-
-    private var settingsButton: some View {
-        Button("Settings", systemImage: "gearshape") { showSettings = true }
-            .labelStyle(.iconOnly)
-            .font(.title3)
-            .frame(width: 44, height: 44)
-            .buttonStyle(.glass)
-            .buttonBorderShape(.circle)
-            .tint(Theme.ink)
     }
 
     /// Whether this launch shows the setup step. Debug: `-setup` always, demos never.
@@ -186,55 +168,95 @@ struct HomeSheet: View {
     private var searchField: some View {
         Button { picking = .destination } label: {
             HStack(spacing: 10) {
-                Image(systemName: "magnifyingglass").fontWeight(.medium)
-                Text("Where to?")
+                Image(systemName: "magnifyingglass").fontWeight(.semibold)
+                Text("Search Beeline").foregroundStyle(.secondary)
                 Spacer()
             }
             .font(.body)
-            .foregroundStyle(.secondary)
             .padding(.horizontal, 14)
-            .frame(minHeight: 50)
-            .surface()
-            .contentShape(.rect(cornerRadius: Theme.radius))
+            .frame(minHeight: 44)
+            .background(.fill.tertiary, in: Capsule())
+            .overlay { Capsule().strokeBorder(.primary.opacity(0.12), lineWidth: 0.5) }
+            .contentShape(.capsule)
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("Search for where to go")
+        .accessibilityLabel("Search for a destination")
     }
 
     private var savedPlaces: some View {
-        HStack(spacing: 10) {
-            savedTile("Home", icon: "house.fill", place: places.home, set: .home) { places.home = nil }
-            savedTile("Work", icon: "briefcase.fill", place: places.work, set: .work) { places.work = nil }
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Places").font(.title3.bold())
+            ScrollView(.horizontal) {
+                HStack(alignment: .top, spacing: 10) {
+                    savedSlot("Home", icon: "house.fill", place: places.home, set: .home, tint: Theme.tint) { places.home = nil }
+                    savedSlot("Work", icon: "briefcase.fill", place: places.work, set: .work, tint: Color(uiColor: .systemGray)) { places.work = nil }
+                    ForEach(places.favorites) { place in
+                        shortcut(place.name, icon: "mappin", tint: Theme.tint) { go(to: place) }
+                            .contextMenu { Button("Remove place", systemImage: "trash", role: .destructive) { places.removeFavorite(place) } }
+                    }
+                    shortcut("Add", icon: "plus", tint: Theme.tint, subdued: true) { picking = .favorite }
+                        .accessibilityLabel("Add a saved place")
+                }
+            }
+            .scrollIndicators(.hidden)
         }
     }
 
-    private func savedTile(_ title: String, icon: String, place: Place?, set: Picking, clear: @escaping () -> Void) -> some View {
-        Button {
+    private func savedSlot(_ title: String, icon: String, place: Place?, set: Picking,
+                           tint: Color, clear: @escaping () -> Void) -> some View {
+        shortcut(title, icon: icon, tint: tint, subtitle: place?.name) {
             if let place { go(to: place) } else { picking = set }
-        } label: {
-            HStack(spacing: 10) {
-                Image(systemName: icon)
-                    .font(.subheadline)
-                    .foregroundStyle(Theme.tint)
-                    .frame(width: 34, height: 34)
-                    .background(Theme.tint.opacity(0.1), in: .circle)
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(title).font(.subheadline.weight(.semibold))
-                    Text(place?.name ?? "Add").font(.caption).foregroundStyle(.secondary).lineLimit(1)
-                }
-                Spacer(minLength: 0)
-            }
-            .padding(10)
-            .frame(maxWidth: .infinity)
-            .surface()
-            .contentShape(.rect(cornerRadius: Theme.radius))
         }
-        .buttonStyle(.plain)
+        .accessibilityHint(place.map { "Find a route to " + $0.name } ?? "Choose where to set " + title)
         .contextMenu {
             if place != nil {
                 Button("Change \(title)", systemImage: "pencil") { picking = set }
                 Button("Remove \(title)", systemImage: "trash", role: .destructive, action: clear)
             }
+        }
+    }
+
+    private func shortcut(_ title: String, icon: String, tint: Color, subtitle: String? = nil, subdued: Bool = false,
+                          action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            VStack(spacing: 6) {
+                Image(systemName: icon)
+                    .font(.system(size: shortcutSize * 0.43, weight: .semibold))
+                    .foregroundStyle(subdued ? tint : .white)
+                    .frame(width: shortcutSize, height: shortcutSize)
+                    .background((subdued ? tint.opacity(0.20) : tint).gradient, in: .circle)
+                VStack(spacing: 1) {
+                    Text(title).font(.subheadline.weight(.medium)).lineLimit(2)
+                    if let subtitle { Text(subtitle).font(.caption).foregroundStyle(.secondary).lineLimit(1) }
+                }
+            }
+            .frame(width: shortcutSize + 4)
+            .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var exampleJourney: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Try a journey").font(.title3.bold())
+            Button {
+                router.path.append(.results(.londonExample))
+            } label: {
+                HStack(spacing: 12) {
+                    Image(systemName: "tram.fill").foregroundStyle(Theme.tint)
+                        .frame(width: 34, height: 34).background(Theme.tint.opacity(0.15), in: .circle)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("King’s Cross → Canary Wharf").font(.subheadline.weight(.semibold))
+                        Text("London example").font(.caption).foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Image(systemName: "chevron.right").font(.caption.bold()).foregroundStyle(.secondary)
+                }
+                .padding(12)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(.fill.tertiary, in: .rect(cornerRadius: 17))
+            }
+            .buttonStyle(.plain)
         }
     }
 
@@ -269,7 +291,7 @@ struct HomeSheet: View {
     @ViewBuilder private var recents: some View {
         if !places.recents.isEmpty {
             VStack(alignment: .leading, spacing: 8) {
-                SectionHeader("Recent")
+                Text("Recents").font(.title3.bold())
                 VStack(spacing: 0) {
                     ForEach(Array(places.recents.prefix(5).enumerated()), id: \.element.id) { index, place in
                         if index > 0 { Divider().padding(.leading, 52) }
@@ -299,7 +321,7 @@ struct HomeSheet: View {
                         }
                     }
                 }
-                .surface()
+                .background(.fill.tertiary, in: .rect(cornerRadius: 17))
             }
         }
     }
@@ -323,6 +345,7 @@ struct HomeSheet: View {
 
     private func refreshNearby(force: Bool = false) async {
         guard nearbyIsVisible, let here = try? await location.current(), nearbyIsVisible, !Task.isCancelled else { return }
+        scene.receivedHomeFix(here)
         await departures.loadNearby(here, force: force)
     }
 

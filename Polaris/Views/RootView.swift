@@ -55,7 +55,7 @@ struct RootView: View {
                 .presentationDetents(router.detents, selection: Binding { router.detent } set: { router.picked($0) })
                 // Wide open the sheet is a pane beside the map, which stays live at every height.
                 .presentationBackgroundInteraction(.enabled(upThrough: router.tallestOverMap))
-                .presentationBackground(Theme.paper)
+                .presentationDragIndicator(.visible)
                 .interactiveDismissDisabled()
                 // Wide open on a Duo: the sheet on the leading half, the map on the other.
                 .sheetBesideFold(.leading, foldX: router.foldX)

@@ -25,10 +25,10 @@ struct BusMarker: View {
                 }
                 Image(systemName: "bus.fill")
                     .font(.system(size: 11, weight: .bold))
-                    .foregroundStyle((color?.luminance ?? 0) < 0.6 ? Color.white : Theme.navy)
+                    .foregroundStyle((color?.luminance ?? 0) < 0.6 ? Color.white : Color.black)
                     .frame(width: 24, height: 24)
                     .background(fill, in: .circle)
-                    .overlay(Circle().strokeBorder(isYours ? Theme.gold : .white, lineWidth: isYours ? 3 : 1.5))
+                    .overlay(Circle().strokeBorder(isYours ? Theme.tint : .white, lineWidth: isYours ? 3 : 1.5))
                     .shadow(color: .black.opacity(0.25), radius: 2, y: 1)
             }
             .frame(width: 44, height: 44)
@@ -173,7 +173,6 @@ struct LineSheet: View {
             .padding(.bottom, 30)
         }
         .scrollIndicators(.hidden)
-        .background(Theme.paper)
         // A bus stop's full name is often longer than the title row ("King's Cross St. Pancras
         // Underground Station") and is in the header below, so the title is its stop letter. The
         // system's own title, as on every other page, so it sits where theirs do: on the leading

@@ -66,7 +66,7 @@ departure ahead is cancelled, it asks the planners once, from the next stop you'
 at and when the re-timed trip has you there (not your GPS underground). A new way is
 offered only if it gets there 5 min sooner, or 15% of the time left if that's more,
 less 3 min per extra change, and TfL flags nothing on it: in the sheet (Switch or
-Keep my route), the banner, the map (edged in gold), the Live Activity and one
+Keep my route), the banner, the map (outlined in blue), the Live Activity and one
 ordinary notification with the same two buttons. Switch keeps what you've done and
 carries on by the new way; Keep isn't asked again for the same reason. "Find a faster
 way" asks by hand. Nothing better and a long wait is a line in the sheet, never a
@@ -159,9 +159,8 @@ yourself doesn't need it.
 
 ### Keys
 
-All optional. A new install opens on a short setup step that says what works with nothing set
-and offers each item below, with what it adds and where to get it; skip it and everything stays
-in Settings. Anything entered in the app is kept in the Keychain and beats the build-time value
+A new install opens on the map. The optional setup link on the home sheet explains each service.
+You can also configure these services in Settings. Anything entered in the app is kept in the Keychain and beats the build-time value
 from `Config/Secrets.xcconfig`. Prefer the app:
 anything in the xcconfig is compiled into the app, where anyone with the `.ipa` can read it.
 

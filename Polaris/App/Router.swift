@@ -315,7 +315,7 @@ final class MapScene {
     /// MapKit ask for location by itself, which must wait for the first-run setup step.
     var position: MapCameraPosition = MapScene.overview
     static let overview = MapCameraPosition.region(MKCoordinateRegion(
-        center: CLLocationCoordinate2D(latitude: 51.509, longitude: -0.118), span: MKCoordinateSpan(latitudeDelta: 0.12, longitudeDelta: 0.12)))
+        center: CLLocationCoordinate2D(latitude: 51.5154, longitude: -0.1755), span: MKCoordinateSpan(latitudeDelta: 0.012, longitudeDelta: 0.012)))
     /// False while the setup step is up: the map shows the overview and asks nothing.
     var mayUseLocation = true
     /// Which way the map is turned, so your heading beam can turn against it.
@@ -330,12 +330,29 @@ final class MapScene {
 
     var isJourney: Bool { if case .journey = content { true } else { false } }
 
+    private var homeFix: Coordinate?
+
     func showHome() {
         content = .home
         focusedLeg = nil
         busWatch = nil
         lastFrame = nil
-        withAnimation(.smooth) { position = mayUseLocation ? .userLocation(fallback: .automatic) : Self.overview }
+        movedByYou = false
+        homeFix = nil
+        if mayUseLocation { centerOnLocation(near: nil) } else { position = Self.overview }
+    }
+
+    func centerOnLocation(near coordinate: Coordinate?) {
+        let fallback: MapCameraPosition = coordinate.map {
+            .camera(MapCamera(centerCoordinate: $0.clLocation, distance: 1100))
+        } ?? Self.overview
+        withAnimation(.smooth) { position = .userLocation(fallback: fallback) }
+    }
+
+    func receivedHomeFix(_ coordinate: Coordinate) {
+        guard case .home = content, homeFix == nil, mayUseLocation else { return }
+        homeFix = coordinate
+        if !movedByYou { centerOnLocation(near: coordinate) }
     }
 
     func showResults(_ journeys: [Journey]) {
@@ -446,8 +463,9 @@ final class MapScene {
     }
 
     func reframeAfterShapeChange() {
-        guard lastFrame != nil, !movedByYou else { return }
-        applyFrame()
+        guard !movedByYou else { return }
+        if lastFrame != nil { applyFrame() }
+        else if case .home = content, let homeFix, mayUseLocation { centerOnLocation(near: homeFix) }
     }
 
     func setButtonLane(_ share: Double) {

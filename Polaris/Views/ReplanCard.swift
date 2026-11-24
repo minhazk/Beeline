@@ -15,7 +15,6 @@ struct ReplanCard: View {
     var compact = false
     var onSwitch: () -> Void = {}
     var onKeep: () -> Void = {}
-    @Environment(\.colorScheme) private var scheme
 
     var body: some View {
         switch model {
@@ -35,7 +34,6 @@ struct ReplanCard: View {
                     .foregroundStyle(.secondary)
                 Button(action: onSwitch) {
                     Text("Switch").font(.subheadline.weight(.semibold)).padding(.horizontal, 6).frame(minHeight: 32)
-                        .foregroundStyle(scheme == .dark ? Theme.navy : .white)
                 }
                 .buttonStyle(.borderedProminent)
                 .tint(Theme.tint)
@@ -59,9 +57,7 @@ struct ReplanCard: View {
                     .fixedSize(horizontal: false, vertical: true)
                 HStack(spacing: 10) {
                     Button(action: onSwitch) {
-                        // White on the light theme's chart blue; navy on the night theme's pale blue.
                         Text("Switch").font(.subheadline.weight(.semibold)).frame(maxWidth: .infinity, minHeight: 32)
-                            .foregroundStyle(scheme == .dark ? Theme.navy : .white)
                     }
                     .buttonStyle(.borderedProminent)
                     .tint(Theme.tint)
@@ -83,7 +79,7 @@ struct ReplanCard: View {
                     Text(message.detail).font(.footnote).foregroundStyle(.secondary)
                 }
             } icon: {
-                Image(systemName: symbol).foregroundStyle(Theme.goldInk)
+                Image(systemName: symbol).foregroundStyle(Theme.tint)
             }
             .padding(14)
             .frame(maxWidth: .infinity, alignment: .leading)
