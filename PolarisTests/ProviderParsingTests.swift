@@ -95,6 +95,27 @@ struct ProviderParsingTests {
         #expect(abs(points[0].latitude - 38.5) < 1e-6 && abs(points[0].longitude + 120.2) < 1e-6)
         #expect(abs(points[2].latitude - 43.252) < 1e-6 && abs(points[2].longitude + 126.453) < 1e-6)
     }
+
+    @Test func providerRedirectsStayOnTheOriginalHTTPSOrigin() {
+        let origin = URL(string: "https://api.tfl.gov.uk/Line")
+        #expect(ProviderRedirects.permits(from: origin, to: URL(string: "https://API.TFL.GOV.UK:443/Line/Status")))
+        for url in ["http://api.tfl.gov.uk/", "https://api.tfl.gov.uk:8443/", "https://example.org/"] {
+            #expect(!ProviderRedirects.permits(from: origin, to: URL(string: url)))
+        }
+    }
+
+    @Test func onlyTransitousReceivesTheContactEnteredOnThePhone() {
+        let contact = "rider@example.org"
+        for host in ["routes.googleapis.com", "api.tfl.gov.uk", "alerts.example.org", "api.transitous.org"] {
+            let agent = HTTP.userAgent(for: URL(string: "https://\(host)/"), transitousContact: contact)
+            #expect(agent.contains(contact) == (host == "api.transitous.org"))
+        }
+    }
+
+    @Test func incompleteOrUnsupportedGeometryHasNoMapPath() {
+        #expect(Polyline.decode("???").isEmpty)
+        #expect(Polyline.decode("??", precision: -1).isEmpty)
+    }
 }
 
 private final class Marker {}

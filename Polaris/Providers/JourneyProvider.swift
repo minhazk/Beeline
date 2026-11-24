@@ -51,22 +51,34 @@ enum ProviderError: LocalizedError, Equatable {
 }
 
 enum HTTP {
-    /// "BeelineHome/0.1 (iOS transit app; <contact>)": the open-data services ask to be able to
-    /// reach whoever runs a client. The contact is the one entered in Settings, else
-    /// POLARIS_CONTACT from Config/*.xcconfig.
-    static var userAgent: String {
-        let info = Bundle.main.infoDictionary ?? [:]
-        let version = info["CFBundleShortVersionString"] as? String ?? "0"
-        let contact = Keychain.get("contact").flatMap(Contact.valid)
-            ?? (info["PolarisContact"] as? String).flatMap(Contact.valid) ?? ""
-        return "BeelineHome/\(version) (iOS transit app\(contact.isEmpty ? "" : "; \(contact)"))"
+    static let privateSession: URLSession = {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.urlCache = nil
+        configuration.httpCookieStorage = nil
+        configuration.urlCredentialStorage = nil
+        return URLSession(configuration: configuration)
+    }()
+
+    static let appUserAgent: String = {
+        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0"
+        return "BeelineHome/\(version) (iOS transit app)"
+    }()
+
+    static func userAgent(for url: URL?, transitousContact: @autoclosure () -> String? = Keychain.get("contact")) -> String {
+        guard let host = url?.host()?.lowercased(), ["api.transitous.org", "api.tfl.gov.uk"].contains(host) else {
+            return appUserAgent
+        }
+        let entered = host == "api.transitous.org" ? transitousContact().flatMap(Contact.valid) : nil
+        let builtIn = Bundle.main.object(forInfoDictionaryKey: "PolarisContact") as? String
+        guard let contact = entered ?? builtIn.flatMap(Contact.valid) else { return appUserAgent }
+        return "\(appUserAgent) (\(contact))"
     }
 
     static func data(for request: URLRequest) async throws -> Data {
         var request = request
-        request.setValue(userAgent, forHTTPHeaderField: "User-Agent")
+        request.setValue(userAgent(for: request.url), forHTTPHeaderField: "User-Agent")
         request.timeoutInterval = 20
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await privateSession.data(for: request, delegate: ProviderRedirects.shared)
         let status = (response as? HTTPURLResponse)?.statusCode ?? 0
         guard (200..<300).contains(status) else { throw ProviderError.http(status) }
         return data
@@ -76,6 +88,23 @@ enum HTTP {
         do { return try JSONDecoder().decode(type, from: data) } catch {
             throw ProviderError.badResponse
         }
+    }
+}
+
+/// Provider redirects may retain a query, request body or API-key header.
+final class ProviderRedirects: NSObject, URLSessionTaskDelegate, Sendable {
+    static let shared = ProviderRedirects()
+
+    static func permits(from: URL?, to: URL?) -> Bool {
+        guard let from, let to, from.scheme?.lowercased() == "https", to.scheme?.lowercased() == "https",
+              let host = from.host()?.lowercased(), host == to.host()?.lowercased(),
+              to.user() == nil, to.password() == nil else { return false }
+        return (from.port ?? 443) == (to.port ?? 443)
+    }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
+                    newRequest request: URLRequest) async -> URLRequest? {
+        Self.permits(from: task.originalRequest?.url, to: request.url) ? request : nil
     }
 }
 
@@ -113,6 +142,7 @@ enum Time {
 enum Polyline {
     /// Google's encoded polyline format; Google uses precision 5, MOTIS 6 (or 7).
     static func decode(_ encoded: String, precision: Int = 5) -> [Coordinate] {
+        guard (0...9).contains(precision) else { return [] }
         let factor = pow(10.0, Double(precision))
         var coordinates: [Coordinate] = []
         var index = encoded.unicodeScalars.startIndex
@@ -121,8 +151,10 @@ enum Polyline {
 
         func next() -> Int? {
             var result = 0, shift = 0
-            while index < scalars.endIndex {
+            // Forty bits cover a longitude delta across the globe at precision nine.
+            while index < scalars.endIndex, shift <= 35 {
                 let byte = Int(scalars[index].value) - 63
+                guard (0...63).contains(byte) else { return nil }
                 index = scalars.index(after: index)
                 result |= (byte & 0x1F) << shift
                 shift += 5
@@ -132,10 +164,12 @@ enum Polyline {
         }
 
         while index < scalars.endIndex {
-            guard let dLat = next(), let dLon = next() else { break }
+            guard let dLat = next(), let dLon = next() else { return [] }
             lat += dLat
             lon += dLon
-            coordinates.append(Coordinate(latitude: Double(lat) / factor, longitude: Double(lon) / factor))
+            let point = Coordinate(latitude: Double(lat) / factor, longitude: Double(lon) / factor)
+            guard (-90...90).contains(point.latitude), (-180...180).contains(point.longitude) else { return [] }
+            coordinates.append(point)
         }
         return coordinates
     }

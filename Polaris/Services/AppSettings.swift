@@ -161,12 +161,18 @@ enum Keychain {
             kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service,
             kSecAttrAccount as String: account,
         ]
-        let deleted = SecItemDelete(query as CFDictionary)
-        guard !value.isEmpty else { return deleted == errSecSuccess || deleted == errSecItemNotFound }
-        var item = query
-        item[kSecValueData as String] = Data(value.utf8)
-        item[kSecAttrAccessible as String] = accessible
-        return SecItemAdd(item as CFDictionary, nil) == errSecSuccess
+        if value.isEmpty {
+            let deleted = SecItemDelete(query as CFDictionary)
+            return deleted == errSecSuccess || deleted == errSecItemNotFound
+        }
+        let attributes: [String: Any] = [kSecValueData as String: Data(value.utf8), kSecAttrAccessible as String: accessible]
+        switch SecItemUpdate(query as CFDictionary, attributes as CFDictionary) {
+        case errSecSuccess: return true
+        case errSecItemNotFound:
+            let item = query.merging(attributes) { _, new in new }
+            return SecItemAdd(item as CFDictionary, nil) == errSecSuccess
+        default: return false
+        }
     }
 
     /// Items saved by earlier builds had the default (readable only while unlocked): moved to

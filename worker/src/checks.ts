@@ -7,10 +7,12 @@ import { issuesFor, issuesInRanges, linesToPlace, type LineMaps } from "./match.
 import { MAX_RETRIES, plannedStep, step, type DeviceState, type Ways } from "./policy.ts";
 import { clearPush, issuesPush, plannedPush, type Push } from "./push.ts";
 import { activeWindows, dateKey, during, eachWay, localTime, PLANNED_CHECK_AT, travelRanges } from "./schedule.ts";
-import { fetchTfL, lineStatusURL, parseLineStatuses, parseStationDisruptions, stationDisruptionsURL, type LineStatus, type StationDisruption } from "./tfl.ts";
+import { lineCatalog, lineChecks, stationChecks } from "./linechecks.ts";
+import type { LineStatus, StationDisruption } from "./tfl.ts";
 import type { Alert, Device, Direction } from "./types.ts";
 
 export interface Env extends ApnsEnv {
+  STATUS_LIMITER: RateLimit;
   APP_TOKEN?: string;
   TFL_APP_KEY?: string;
   /** How many phones may register (a var; default 100). */
@@ -25,18 +27,20 @@ interface Row {
   time_zone: string;
   alerts: string;
   state: string;
+  revision: string;
 }
 
 export const emptyState = (): DeviceState => ({ alerts: {}, planned: {} });
 
-export async function loadDevices(env: Env): Promise<(Device & { state: DeviceState })[]> {
-  const { results } = await env.DB.prepare("SELECT token, environment, time_zone, alerts, state FROM devices").all<Row>();
+export async function loadDevices(env: Env): Promise<(Device & { state: DeviceState; revision: string })[]> {
+  const { results } = await env.DB.prepare("SELECT token, environment, time_zone, alerts, state, revision FROM devices").all<Row>();
   return results.map((r) => ({
     token: r.token,
     environment: r.environment,
     timeZone: r.time_zone,
     alerts: JSON.parse(r.alerts) as Alert[],
     state: { ...emptyState(), ...(JSON.parse(r.state) as Partial<DeviceState>) },
+    revision: r.revision,
   }));
 }
 
@@ -67,16 +71,15 @@ export async function runChecks(env: Env, now = Date.now()): Promise<{ devices: 
   if (!live.length && !plannedAlerts.length) return { devices: devices.length, checked: 0, sent: 0 };
 
   const segments = [...live, ...plannedAlerts].flatMap((a) => a.segments);
-  let lines: LineStatus[] = [], stations: StationDisruption[] = [];
-  try {
-    [lines, stations] = await Promise.all([
-      live.length ? fetchTfL(lineStatusURL(live.flatMap((a) => a.segments.map((s) => s.line.id))), 60, env.TFL_APP_KEY).then(parseLineStatuses) : [],
-      fetchTfL(stationDisruptionsURL(segments.map((s) => s.mode)), 60, env.TFL_APP_KEY).then(parseStationDisruptions),
-    ]);
-  } catch (error) {
-    console.error("TfL unavailable", String(error));
-    return { devices: devices.length, checked: 0, sent: 0 };
-  }
+  let catalog: Map<string, string>;
+  try { catalog = await lineCatalog(env.TFL_APP_KEY); }
+  catch { return { devices: devices.length, checked: 0, sent: 0 }; }
+  const [lineReport, stationReport] = await Promise.all([
+    lineChecks(live.flatMap((a) => a.segments), catalog, env.TFL_APP_KEY),
+    stationChecks(segments, env.TFL_APP_KEY),
+  ]);
+  const { lines } = lineReport, { stations } = stationReport;
+  let checked = 0;
 
   // Only when TfL names a section in words, or says one way only: the line's stations in order.
   // Each way an alert's times go, too: which ways a disruption is on decides what's news.
@@ -89,15 +92,21 @@ export async function runChecks(env: Env, now = Date.now()): Promise<{ devices: 
     const before = JSON.stringify(device.state);
     const state = device.state;
     const retries = { ...(state.retries ?? {}) };
-    let gone = false;
+    let stopped = false;
 
     /** Sends one push and keeps what it decided only once it's done with: sent, or refused for
      * good (logged loudly), or failed for a passing reason too often. A passing failure keeps the
      * previous state for that alert alone, so only that push is tried again next run. */
     const deliver = async (key: string, push: Push, commit: () => void): Promise<boolean> => {
+      const current = await env.DB.prepare("SELECT 1 FROM devices WHERE token = ?1 AND revision = ?2").bind(device.token, device.revision).first();
+      if (!current) {
+        stopped = true;
+        return false;
+      }
       const outcome = await attempt(env, device.token, device.environment, push, now);
       if (outcome === "gone") {
-        gone = true;
+        stopped = true;
+        await env.DB.prepare("DELETE FROM devices WHERE token = ?1 AND revision = ?2").bind(device.token, device.revision).run();
         return false;
       }
       if (outcome === "sent") sent++;
@@ -113,7 +122,9 @@ export async function runChecks(env: Env, now = Date.now()): Promise<{ devices: 
 
     try {
       for (const { alert, base } of active) {
-        if (gone) break;
+        if (stopped) break;
+        if (alert.segments.some((s) => catalog.get(s.line.id) !== s.mode || lineReport.missing.has(s.line.id) || stationReport.missing.has(s.mode))) continue;
+        checked++;
         const issues = issuesFor(alert, lines, stations, { at: now }, maps);
         const result = step(state.alerts[alert.id], issues, now, waysFor(alert, base, lines, stations, now, maps));
         const commit = () => void (state.alerts[alert.id] = result.state);
@@ -121,17 +132,22 @@ export async function runChecks(env: Env, now = Date.now()): Promise<{ devices: 
         else if (result.push?.kind === "clear") await deliver(alert.id, clearPush(alert, now), commit);
         else commit();
       }
-      if (planned && !gone) {
+      if (planned && !stopped) {
         let allDone = true;
         const tomorrow = device.alerts.map((alert) => ({ alert, ranges: travelRanges(alert, now, device.timeZone, 2, true) })).filter((t) => t.ranges.length);
         if (tomorrow.length) {
           const all = tomorrow.flatMap((t) => t.ranges);
           const range = { from: Math.min(...all.map((r) => r.from)), to: Math.max(...all.map((r) => r.to)) };
-          const ahead = parseLineStatuses(await fetchTfL(lineStatusURL(tomorrow.flatMap((t) => t.alert.segments.map((s) => s.line.id)), range), 900, env.TFL_APP_KEY));
+          const forecast = await lineChecks(tomorrow.flatMap((t) => t.alert.segments), catalog, env.TFL_APP_KEY, range);
+          const ahead = forecast.lines;
           const more = linesToPlace(tomorrow.flatMap((t) => eachWay(t.alert)), ahead, stations).filter((id) => !maps.has(id));
           for (const [id, map] of await loadLineMaps(more, env.TFL_APP_KEY, now)) maps.set(id, map);
           for (const { alert, ranges } of tomorrow) {
-            if (gone) break;
+            if (stopped) break;
+            if (alert.segments.some((s) => catalog.get(s.line.id) !== s.mode || forecast.missing.has(s.line.id) || stationReport.missing.has(s.mode))) {
+              allDone = false;
+              continue;
+            }
             const result = plannedStep(state.planned, alert.id, issuesInRanges(alert, ahead, stations, ranges, maps), now);
             const commit = () => void (state.planned = result.planned);
             if (result.fresh.length) allDone = (await deliver(`planned:${alert.id}`, plannedPush(alert, result.fresh, now), commit)) && allDone;
@@ -146,17 +162,15 @@ export async function runChecks(env: Env, now = Date.now()): Promise<{ devices: 
     } catch (error) {
       console.error("check failed", String(error));
     }
-    if (gone) {
-      await env.DB.prepare("DELETE FROM devices WHERE token = ?1").bind(device.token).run();
-      continue;
-    }
+    if (stopped) continue;
     if (Object.keys(retries).length) state.retries = retries;
     else delete state.retries;
     if (JSON.stringify(state) !== before) {
-      await env.DB.prepare("UPDATE devices SET state = ?1 WHERE token = ?2").bind(JSON.stringify(state), device.token).run();
+      await env.DB.prepare("UPDATE devices SET state = ?1, revision = lower(hex(randomblob(16))) WHERE token = ?2 AND revision = ?3")
+        .bind(JSON.stringify(state), device.token, device.revision).run();
     }
   }
-  return { devices: devices.length, checked: live.length, sent };
+  return { devices: devices.length, checked, sent };
 }
 
 /** For an alert with any time going one way: the way ridden now, which ways each disruption on

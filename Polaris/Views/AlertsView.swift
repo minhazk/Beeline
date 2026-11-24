@@ -66,8 +66,11 @@ struct AlertsView: View {
                     // Drawn off plainly: in a pane the disabled style alone can read as live.
                     .opacity(store.isConfigured ? 1 : 0.45)
             } footer: {
+                if let cleanupProblem = store.cleanupProblem {
+                    Text(cleanupProblem).foregroundStyle(Theme.warning)
+                }
                 if !store.isConfigured {
-                    Text("Alerts need a server to watch TfL while Beeline Home is closed, and this phone isn't set up with one. Enter its address and token in Settings, under Alerts server; the README says how to run your own.")
+                    Text("Add your server address and this phone's invitation under Settings → Alerts server to receive notifications when Beeline Home is closed.")
                 }
             }
 

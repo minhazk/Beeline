@@ -2,32 +2,9 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { runChecks, type Env } from "../src/checks.ts";
 import { forgetLineMaps } from "../src/linemap.ts";
-import { contract, fixture } from "./helpers.ts";
+import { contract, fixture, sqliteD1 } from "./helpers.ts";
 
-/** Enough of D1 for the checks: the devices table and the APNs token. */
-function fakeDB(rows: Record<string, any>[]) {
-  const meta = new Map<string, { value: string; updated_at: number }>();
-  const db = {
-    rows, meta,
-    prepare(sql: string) {
-      let args: unknown[] = [];
-      const statement = {
-        bind(...values: unknown[]) { args = values; return statement; },
-        async all() { return { results: rows.map((r) => ({ ...r })) }; },
-        async first() { return sql.includes("FROM meta") ? meta.get("apns_jwt") ?? null : null; },
-        async run() {
-          if (sql.startsWith("UPDATE devices SET state")) rows.find((r) => r.token === args[1])!.state = args[0];
-          if (sql.startsWith("DELETE FROM devices")) rows.splice(rows.findIndex((r) => r.token === args[0]), 1);
-          if (sql.startsWith("INSERT INTO meta")) meta.set("apns_jwt", { value: args[0] as string, updated_at: args[1] as number });
-          if (sql.startsWith("DELETE FROM meta")) meta.clear();
-          return {};
-        },
-      };
-      return statement;
-    },
-  };
-  return db;
-}
+const token = "ab".repeat(32);
 
 /** A quoted notice: severe delays near Heathrow and minor ones elsewhere, no stations listed. */
 const NOTICE = [{ id: "elizabeth", name: "Elizabeth line", lineStatuses: [{ statusSeverity: 6, statusSeverityDescription: "Severe Delays", reason: "Elizabeth line: Severe delays between Paddington and Heathrow Terminals, and MINOR DELAYS between Hayes & Harlington and Reading, and between Whitechapel and Shenfield. GOOD SERVICE on the rest of the line.", validityPeriods: [], disruption: { category: "RealTime", affectedStops: [] } }] }];
@@ -35,7 +12,8 @@ const NOTICE = [{ id: "elizabeth", name: "Elizabeth line", lineStatuses: [{ stat
 async function setup(apnsStatus: number | ((n: number) => number) = 200, status: unknown = fixture("tfl-line-status-detail.json"), sequence: number | "fixture" | "hang" = "fixture", alerts: unknown[] = [contract().alerts[0]]) {
   const pair = (await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, ["sign"])) as CryptoKeyPair;
   const key = Buffer.from(await crypto.subtle.exportKey("pkcs8", pair.privateKey)).toString("base64");
-  const db = fakeDB([{ token: "ab".repeat(32), environment: "sandbox", time_zone: "Europe/London", alerts: JSON.stringify(alerts), state: JSON.stringify({ alerts: {}, planned: {} }) }]);
+  const db = sqliteD1();
+  db.rows.set(token, { environment: "sandbox", time_zone: "Europe/London", alerts: JSON.stringify(alerts), state: JSON.stringify({ alerts: {}, planned: {} }) });
   const env = { DB: db, APNS_KEY: key, APNS_KEY_ID: "KEY123", APNS_TEAM_ID: "TEAM123456", APNS_TOPIC: "com.cloudslope.beeline" } as unknown as Env;
   const requests: { url: string; init?: RequestInit }[] = [];
   let pushCount = 0; // pushes asked of APNs so far, however often a test clears `requests`
@@ -47,6 +25,7 @@ async function setup(apnsStatus: number | ((n: number) => number) = 200, status:
       const reason = ({ 410: "Unregistered", 400: "BadTopic", 429: "TooManyRequests", 503: "ServiceUnavailable" } as Record<number, string>)[code] ?? "InternalServerError";
       return new Response(code === 200 ? "" : JSON.stringify({ reason }), { status: code });
     }
+    if (url.includes("/Line/Mode/")) return Response.json(fixture("tfl-lines.json"));
     if (url.includes("/StopPoint/")) return Response.json(typeof status === "function" ? stopsNow : status === NOTICE ? [] : fixture("tfl-station-disruptions.json"));
     if (url.includes("/to/")) return Response.json(fixture("tfl-line-status-week.json"));
     if (url.includes("/Route/Sequence/")) {
@@ -80,7 +59,7 @@ test("in the evening window: today's closure is pushed once, Time Sensitive", as
   const payload = JSON.parse(push.init!.body as string);
   assert.equal(payload.aps["interruption-level"], "time-sensitive");
   assert.equal(payload.aps.alert.subtitle, "Canary Wharf closed (Elizabeth line)");
-  assert.ok(JSON.parse(db.rows[0].state).alerts[contract().alerts[0].id].open);
+  assert.ok(JSON.parse(db.rows.get(token)!.state).alerts[contract().alerts[0].id].open);
 
   // Two minutes later, same closure: quiet. The provider token is reused.
   requests.length = 0;
@@ -93,7 +72,7 @@ test("after 7 pm: tomorrow's planned works are checked once", async () => {
   const at = Date.parse("2026-11-09T19:05:00Z");
   await runChecks(env, at);
   assert.ok(requests.some((r) => r.url.includes("/Status/2026-11-10T07:00:00/to/2026-11-10T19:30:00?detail=true")), requests.map((r) => r.url).join("\n"));
-  assert.equal(JSON.parse(db.rows[0].state).plannedOn, "2026-11-09");
+  assert.equal(JSON.parse(db.rows.get(token)!.state).plannedOn, "2026-11-09");
   requests.length = 0;
   await runChecks(env, at + 2 * 60_000);
   assert.ok(!requests.some((r) => r.url.includes("/to/")), "not twice in an evening");
@@ -102,8 +81,39 @@ test("after 7 pm: tomorrow's planned works are checked once", async () => {
 test("a phone Apple says is gone is forgotten", async () => {
   const { env, db } = await setup(410);
   await runChecks(env, Date.parse("2026-11-09T17:00:00Z"));
-  assert.equal(db.rows.length, 0);
+  assert.equal(db.rows.size, 0);
 });
+
+test("an edit during the TfL lookup stops delivery from the obsolete registration", async () => {
+  const { env, db, requests } = await setup();
+  const recorded = globalThis.fetch;
+  globalThis.fetch = async (input, init) => {
+    if (String(input).includes("/Line/")) {
+      await db.prepare("UPDATE devices SET revision = 'edited', alerts = '[]' WHERE token = ?1").bind(token).run();
+    }
+    return recorded(input, init);
+  };
+  await runChecks(env, Date.parse("2026-11-09T17:00:00Z"));
+  assert.equal(requests.filter(r => r.url.includes("push.apple.com")).length, 0);
+  assert.equal(db.rows.get(token)!.revision, "edited");
+});
+
+for (const response of [200, 410]) {
+  test(`a registration refreshed during APNs response ${response} retains its own state`, async () => {
+    const { env, db } = await setup(response);
+    const recorded = globalThis.fetch;
+    globalThis.fetch = async (input, init) => {
+      if (String(input).includes("push.apple.com")) {
+        await db.prepare("UPDATE devices SET revision = 'refreshed', state = ?1 WHERE token = ?2")
+          .bind('{"alerts":{},"planned":{}}', token).run();
+      }
+      return recorded(input, init);
+    };
+    await runChecks(env, Date.parse("2026-11-09T17:00:00Z"));
+    assert.equal(db.rows.get(token)!.revision, "refreshed");
+    assert.deepEqual(JSON.parse(db.rows.get(token)!.state), { alerts: {}, planned: {} });
+  });
+}
 
 test("trouble TfL places elsewhere on the line: the line's order is fetched, and nothing is pushed", async () => {
   forgetLineMaps();
@@ -259,10 +269,11 @@ test("review 5: memory from before ways counts as told the alert's own way, so a
   await runChecks(env, at("09:00"));
   assert.equal(requests.filter((r) => r.url.includes("push.apple.com")).length, 1);
   // As stored before this change: no ways. Then the phone adds a back time.
-  const state = JSON.parse(db.rows[0].state);
+  const state = JSON.parse(db.rows.get(token)!.state);
   for (const entry of Object.values(state.alerts[outOnly.id].live) as any[]) delete entry.ways;
-  db.rows[0].state = JSON.stringify(state);
-  db.rows[0].alerts = JSON.stringify([{ ...outOnly, windows: [{ start: 420, end: 600 }, { start: 600, end: 720, direction: "back" }] }]);
+  await db.prepare("UPDATE devices SET state = ?1 WHERE token = ?2").bind(JSON.stringify(state), token).run();
+  await db.prepare("UPDATE devices SET alerts = ?1 WHERE token = ?2")
+    .bind(JSON.stringify([{ ...outOnly, windows: [{ start: 420, end: 600 }, { start: 600, end: 720, direction: "back" }] }]), token).run();
   now = EAST_TO_BOTH_SAME;
   await runChecks(env, at("10:00"));
   assert.equal(requests.filter((r) => r.url.includes("push.apple.com")).length, 2, "told on the way back");
@@ -275,9 +286,9 @@ test("review 5: memory from before ways causes no repeat push at the deploy for 
   const outOnly = { ...slotted, direction: "out", windows: [{ start: 420, end: 720 }] };
   const { env, db, requests } = await setup(200, () => now, "fixture", [outOnly]);
   await runChecks(env, at("09:00"));
-  const state = JSON.parse(db.rows[0].state);
+  const state = JSON.parse(db.rows.get(token)!.state);
   for (const entry of Object.values(state.alerts[outOnly.id].live) as any[]) delete entry.ways;
-  db.rows[0].state = JSON.stringify(state);
+  await db.prepare("UPDATE devices SET state = ?1 WHERE token = ?2").bind(JSON.stringify(state), token).run();
   now = EAST_TO_BOTH_SAME;
   await runChecks(env, at("09:04"));
   assert.equal(requests.filter((r) => r.url.includes("push.apple.com")).length, 1);
@@ -285,11 +296,11 @@ test("review 5: memory from before ways causes no repeat push at the deploy for 
 
 test("pushes not configured: nothing judged, so nothing is marked told", async () => {
   const { env, db, requests } = await setup();
-  const before = db.rows[0].state;
+  const before = db.rows.get(token)!.state;
   delete (env as any).APNS_TOPIC;
   assert.deepEqual(await runChecks(env, Date.parse("2026-11-09T17:00:00Z")), { devices: 1, checked: 0, sent: 0 });
   assert.equal(requests.length, 0, "not even TfL is asked");
-  assert.equal(db.rows[0].state, before);
+  assert.equal(db.rows.get(token)!.state, before);
 });
 
 // Two alerts riding the same closure, each its own push.
@@ -323,7 +334,7 @@ test("a refusal for good (bad topic) isn't retried: decided, logged, done", asyn
   await runChecks(env, evening);
   await runChecks(env, evening + 120_000);
   assert.equal(pushesTo(requests).length, 1);
-  assert.ok(JSON.parse(db.rows[0].state).alerts[contract().alerts[0].id].open, "recorded as handled");
+  assert.ok(JSON.parse(db.rows.get(token)!.state).alerts[contract().alerts[0].id].open, "recorded as handled");
 });
 
 test("planned works: a passing failure leaves the evening open for that alert only", async () => {
@@ -340,11 +351,11 @@ test("planned works: a passing failure leaves the evening open for that alert on
   const at7 = Date.parse("2026-11-09T19:05:00Z");
   await runChecks(env, at7);
   assert.equal(pushesTo(requests).length, 1, "the recorded week has planned works for tomorrow");
-  assert.equal(JSON.parse(db.rows[0].state).plannedOn, undefined, "not settled while a push is owed");
+  assert.equal(JSON.parse(db.rows.get(token)!.state).plannedOn, undefined, "not settled while a push is owed");
   requests.length = 0;
   await runChecks(env, at7 + 120_000);
   assert.equal(pushesTo(requests).length, 1, "the owed one, once");
-  assert.equal(JSON.parse(db.rows[0].state).plannedOn, "2026-11-09");
+  assert.equal(JSON.parse(db.rows.get(token)!.state).plannedOn, "2026-11-09");
   requests.length = 0;
   await runChecks(env, at7 + 240_000);
   assert.equal(pushesTo(requests).length, 0);
@@ -361,4 +372,22 @@ test("an all-digit team ID given as a number still signs as text", async () => {
   assert.equal((await runChecks(env, Date.parse("2026-11-09T17:00:00Z"))).sent, 1);
   const jwt = (requests.find((r) => r.url.includes("push.apple.com"))!.init!.headers as Record<string, string>).authorization.split(" ")[1];
   assert.equal(JSON.parse(Buffer.from(jwt.split(".")[1], "base64url").toString()).iss, "1234567890");
+});
+
+test("an incomplete TfL batch preserves the missing line's memory and leaves other modes running", async () => {
+  const [elizabeth, district] = contract().alerts;
+  const second = { ...district, days: elizabeth.days, windows: elizabeth.windows };
+  const { env, db, requests } = await setup(200, fixture("tfl-line-status-detail.json"), "fixture", [elizabeth, second]);
+  const stored = { alerts: { [second.id]: { open: true, live: {}, goodSince: 1234 } }, planned: {} };
+  await db.prepare("UPDATE devices SET state = ? WHERE token = ?").bind(JSON.stringify(stored), token).run();
+  const mockFetch = globalThis.fetch;
+  globalThis.fetch = async (input, init) => {
+    const url = String(input);
+    if (url.includes("/Status?") && url.includes("district")) return Response.json([]);
+    return mockFetch(input, init);
+  };
+  const result = await runChecks(env, Date.parse("2026-11-09T17:00:00Z"));
+  assert.equal(result.checked, 1);
+  assert.ok(requests.some((r) => r.url.includes("push.apple.com")));
+  assert.deepEqual(JSON.parse(String(db.rows.get(token)!.state)).alerts[second.id], stored.alerts[second.id]);
 });

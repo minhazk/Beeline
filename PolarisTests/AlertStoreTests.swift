@@ -1,4 +1,5 @@
 import Foundation
+import Security
 import Testing
 @testable import Polaris
 
@@ -23,7 +24,7 @@ struct AlertStoreTests {
         }
     }
 
-    final class Wire: @unchecked Sendable {
+    @MainActor final class Wire {
         var requests: [URLRequest] = []
         var failing: Set<String> = []
         var reply = Data(#"{"checkedAt":"2026-11-24T12:00:00Z","alerts":[]}"#.utf8)
@@ -38,18 +39,21 @@ struct AlertStoreTests {
     static let pushToken = String(repeating: "ab", count: 32)
 
     func store(secrets: Secrets = Secrets(), wire: Wire = Wire(), registered: Bool = true,
-               builtIn: (String, String)? = ("https://built.example.com", "built-token")) -> AlertStore {
+               builtIn: (String, String)? = ("https://built.example.com", "built-token"),
+               defaults existingDefaults: UserDefaults? = nil) -> AlertStore {
         let name = "AlertStoreTests.\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: name)!
-        defaults.set(try! JSONEncoder().encode([RouteAlert()]), forKey: "alerts")
-        defaults.set(Self.pushToken, forKey: "alerts.token")
-        if registered { defaults.set(Self.pushToken, forKey: "alerts.registered") }
+        let defaults = existingDefaults ?? UserDefaults(suiteName: name)!
+        if defaults.object(forKey: "alerts") == nil {
+            defaults.set(try! JSONEncoder().encode([RouteAlert()]), forKey: "alerts")
+            defaults.set(Self.pushToken, forKey: "alerts.token")
+            if registered { defaults.set(Self.pushToken, forKey: "alerts.registered") }
+        }
         var deps = AlertStore.Dependencies()
         deps.secrets = secrets
         deps.defaults = defaults
         deps.builtInURL = builtIn?.0
         deps.builtInToken = builtIn?.1
-        deps.transport = { try wire.send($0) }
+        deps.transport = { try await wire.send($0) }
         deps.registerForPush = { nil }
         deps.syncDelay = .zero
         return AlertStore(deps)
@@ -82,6 +86,68 @@ struct AlertStoreTests {
         #expect(store.server?.url.host() == "mine.example.com")
     }
 
+    @Test func launchRetriesAFormerServersRemovalWithItsOwnTokenEvenWhenAlertsAreOff() async throws {
+        let secrets = Secrets(), offline = Wire()
+        secrets.items[AlertStore.urlAccount] = "https://old.example.com"
+        secrets.items[AlertStore.tokenAccount] = "old-token"
+        offline.failing = ["old.example.com"]
+        let defaults = UserDefaults(suiteName: "FormerServerTests.\(UUID().uuidString)")!
+        let first = store(secrets: secrets, wire: offline, builtIn: nil, defaults: defaults)
+        let note = try await first.useServer(url: "", token: "")
+        #expect(note?.contains("old.example.com") == true)
+
+        let wire = Wire()
+        let next = store(secrets: secrets, wire: wire, builtIn: nil, defaults: defaults)
+        #expect(next.server == nil)
+        next.resume()
+        await next.waitForSync()
+        #expect(wire.requests.map(\.httpMethod) == ["DELETE"])
+        #expect(wire.requests.first?.url?.host() == "old.example.com")
+        #expect(wire.requests.first?.value(forHTTPHeaderField: "Authorization") == "Bearer old-token")
+        #expect(wire.requests.first?.value(forHTTPHeaderField: "X-Device-Secret") == offline.requests.first?.value(forHTTPHeaderField: "X-Device-Secret"))
+        next.resume()
+        await next.waitForSync()
+        #expect(wire.requests.count == 1, "a successful removal is forgotten")
+    }
+
+    @Test func reselectingAFormerServerCancelsItsPendingRemoval() async throws {
+        let secrets = Secrets(), offline = Wire()
+        secrets.items[AlertStore.urlAccount] = "https://old.example.com"
+        secrets.items[AlertStore.tokenAccount] = "old-token"
+        offline.failing = ["old.example.com"]
+        let defaults = UserDefaults(suiteName: "ReselectedServerTests.\(UUID().uuidString)")!
+        let first = store(secrets: secrets, wire: offline, builtIn: nil, defaults: defaults)
+        try await first.useServer(url: "", token: "")
+        let wire = Wire()
+        let next = store(secrets: secrets, wire: wire, builtIn: nil, defaults: defaults)
+        try await next.useServer(url: "https://old.example.com", token: "renewed-token")
+        await next.waitForSync()
+        #expect(wire.requests.contains { $0.httpMethod == "PUT" })
+        #expect(!wire.requests.contains { $0.httpMethod == "DELETE" })
+        #expect(wire.requests.allSatisfy { $0.value(forHTTPHeaderField: "Authorization") == "Bearer renewed-token" })
+    }
+
+    @Test func launchFinishesTheLastAlertRemovalAfterAnOfflineDelete() async throws {
+        let secrets = Secrets(), offline = Wire()
+        offline.failing = ["built.example.com"]
+        let defaults = UserDefaults(suiteName: "LastAlertTests.\(UUID().uuidString)")!
+        let first = store(secrets: secrets, wire: offline, defaults: defaults)
+        let alert = try #require(first.alerts.first)
+        first.delete(alert.id)
+        await first.waitForSync()
+        #expect(first.syncProblem != nil)
+        let wire = Wire()
+        let next = store(secrets: secrets, wire: wire, defaults: defaults)
+        #expect(next.alerts.isEmpty)
+        next.resume()
+        await next.waitForSync()
+        #expect(wire.requests.map(\.httpMethod) == ["DELETE"])
+        #expect(wire.requests.first?.url?.lastPathComponent == Self.pushToken)
+        next.resume()
+        await next.waitForSync()
+        #expect(wire.requests.count == 1)
+    }
+
     @Test func aLockedKeychainMeansWaitNotAnotherServer() async {
         let secrets = Secrets(), wire = Wire()
         secrets.items[AlertStore.urlAccount] = "https://mine.example.com"
@@ -95,6 +161,83 @@ struct AlertStoreTests {
         secrets.locked = []
         await store.refreshStatus(force: true)
         #expect(wire.requests.map { $0.url?.host() } == ["mine.example.com"], "once readable, the entered server")
+    }
+
+    @Test func failedSettingsWriteKeepsTheOldPairAndRegistration() async throws {
+        let secrets = Secrets(), wire = Wire()
+        secrets.items[AlertStore.urlAccount] = "https://old.example.com"
+        secrets.items[AlertStore.tokenAccount] = "old-token"
+        let store = self.store(secrets: secrets, wire: wire)
+        secrets.failingWrites = [AlertStore.choiceAccount]
+        let draft = AlertServerDraft()
+        draft.load(from: store)
+        draft.url = "https://new.example.com"
+        #expect(draft.token.isEmpty, "changing the server clears its prefilled token")
+        draft.token = "new-token"
+        #expect(!(await draft.apply(to: store)))
+        #expect(draft.problem == AlertServer.Problem.cannotSave.message)
+        #expect(wire.requests.isEmpty, "the old registration is only removed after the new pair is stored")
+        #expect(store.enteredURL == "https://old.example.com")
+        _ = await store.sendTest()
+        #expect(wire.requests.map(\.httpMethod) == ["POST"], "the old registration still works")
+        #expect(wire.requests.first?.value(forHTTPHeaderField: "Authorization") == "Bearer old-token")
+        #expect(self.store(secrets: secrets).server == store.server, "relaunch restores the same complete pair")
+    }
+
+    @Test func resettingTheChoiceIgnoresLeftoverLegacyItems() async throws {
+        let secrets = Secrets()
+        secrets.items[AlertStore.urlAccount] = "https://old.example.com"
+        secrets.items[AlertStore.tokenAccount] = "old-token"
+        secrets.failingWrites = [AlertStore.urlAccount, AlertStore.tokenAccount]
+        let store = self.store(secrets: secrets)
+        try await store.useServer(url: "https://new.example.com", token: "new-token")
+        await store.waitForSync()
+        #expect(self.store(secrets: secrets).server?.token == "new-token")
+        secrets.failingWrites.insert(AlertStore.choiceAccount)
+        await #expect(throws: AlertServer.Problem.cannotSave) { try await store.useServer(url: "", token: "") }
+        #expect(self.store(secrets: secrets).server?.token == "new-token", "a failed replacement keeps the previous record")
+        secrets.failingWrites.remove(AlertStore.choiceAccount)
+        try await store.useServer(url: "", token: "ignored")
+        await store.waitForSync()
+        #expect(self.store(secrets: secrets).server?.isBuiltIn == true)
+        #expect(self.store(secrets: secrets, builtIn: nil).server == nil)
+        secrets.locked = [AlertStore.choiceAccount]
+        #expect(self.store(secrets: secrets).server == nil, "an unreadable choice never falls back to stale fields")
+    }
+
+    @Test func onlyTheConfiguredLegacyTenantInheritsItsSecret() async throws {
+        let secrets = Secrets()
+        let upper = AlertServer(url: try AlertServer.address("https://host.example/Team"), token: "upper", isBuiltIn: false)
+        let lower = AlertServer(url: try AlertServer.address("https://host.example/team"), token: "lower", isBuiltIn: false)
+        #expect(upper.legacyScopedAccount == lower.legacyScopedAccount)
+        #expect(upper.secretAccount != lower.secretAccount)
+        let legacy = String(repeating: "s", count: 43)
+        secrets.items[AlertStore.urlAccount] = upper.url.absoluteString
+        secrets.items[AlertStore.tokenAccount] = upper.token
+        secrets.items[upper.legacyScopedAccount] = legacy
+        let store = self.store(secrets: secrets, registered: false)
+        try await store.useServer(url: lower.url.absoluteString, token: lower.token)
+        await store.waitForSync()
+        let relaunched = self.store(secrets: secrets)
+        #expect(relaunched.server == lower)
+        #expect(try relaunched.deviceSecret(for: lower) != legacy)
+        #expect(try relaunched.deviceSecret(for: upper) == legacy)
+    }
+
+    @Test func randomFailureNeverRegistersWithPredictableBytes() async throws {
+        let secrets = Secrets(), wire = Wire()
+        var deps = AlertStore.Dependencies()
+        deps.defaults = UserDefaults(suiteName: "AlertRandomTests.\(UUID().uuidString)")!
+        deps.secrets = secrets
+        deps.builtInURL = "https://built.example.com"
+        deps.builtInToken = "built-token"
+        deps.transport = { try await wire.send($0) }
+        deps.fillRandomBytes = { _ in errSecNotAvailable }
+        let store = AlertStore(deps)
+        let server = try #require(store.server)
+        await #expect(throws: AlertStore.AlertError.self) { try await store.send("PUT", path: "devices/test", to: server) }
+        #expect(secrets.writes.isEmpty)
+        #expect(wire.requests.isEmpty)
     }
 
     @Test func aLockedSecretIsNeverReplaced() throws {

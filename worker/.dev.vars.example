@@ -1,5 +1,5 @@
 # Copy to .dev.vars (git-ignored) for `wrangler dev`. Live values are Worker secrets.
-# Shared with the app (Config/Secrets.xcconfig POLARIS_ALERTS_TOKEN): any long random string.
+# Generate a random invitation for each phone. APP_TOKEN accepts one invitation per line.
 APP_TOKEN=
 # Apple Push Notifications key (developer.apple.com, Keys): the .p8 file's contents and its key ID.
 APNS_KEY=

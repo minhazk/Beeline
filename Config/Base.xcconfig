@@ -11,7 +11,7 @@ DEVELOPMENT_TEAM =
 
 // How Beeline Home identifies itself to the open-data services (User-Agent): a URL or address
 // where whoever runs them can reach the person running this build. Empty sends none.
-POLARIS_CONTACT =
+POLARIS_CONTACT = https:/$()/github.com/minhazk/beeline
 
 // The alerts server (worker/) and its APP_TOKEN. Both empty: alerts are off until an
 // address and token are entered in Settings.

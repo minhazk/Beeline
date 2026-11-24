@@ -34,6 +34,26 @@ test("planned works say what and when", () => {
   assert.equal(push.collapseId, `${commute.id}-planned`);
 });
 
+test("every kind of alert fits Apple's byte limit with long Unicode notices", () => {
+  const text = '🚇界"\\\u0001'.repeat(260);
+  const alert = {
+    ...commute,
+    id: "a".repeat(64),
+    name: text.slice(0, 120),
+    segments: Array.from({ length: 8 }, (_, i) => ({
+      ...commute.segments[0],
+      line: { id: String(i), name: `${i}${"界".repeat(79)}` },
+    })),
+  };
+  const issues = Array.from({ length: 20 }, () => ({ ...closed, title: text, detail: text }));
+  for (const push of [issuesPush(alert, issues, now), clearPush(alert, now), plannedPush(alert, issues.slice(0, 1), now)]) {
+    const fields = (push.payload as any).aps.alert;
+    assert.ok(Buffer.byteLength(JSON.stringify(push.payload), "utf8") <= 4096);
+    assert.ok(fields.title.length <= 120 && (fields.subtitle?.length ?? 0) <= 160 && fields.body.length <= 700);
+    assert.ok([fields.title, fields.subtitle ?? "", fields.body].every(field => field.isWellFormed()));
+  }
+});
+
 test("lines are said the way people say them", () => {
   assert.equal(lineList(district), "the District line");
   assert.equal(lineList({ ...commute, segments: [...commute.segments, { line: { id: "southeastern", name: "Southeastern" }, mode: "national-rail", stations: [] }] }),

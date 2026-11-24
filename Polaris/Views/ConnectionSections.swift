@@ -30,7 +30,7 @@ enum SetupItem {
         switch self {
         case .google: "From console.cloud.google.com: enable the Routes API, then create a key limited to iOS apps and the Routes API, with a daily cap."
         case .tfl: "Free from api-portal.tfl.gov.uk."
-        case .alerts: "Run beeline-alerts on Cloudflare's free plan; the README shows how. Enter its address and APP_TOKEN."
+        case .alerts: "Enter your server address and this phone's invitation. The README explains how to set up a server."
         case .contact: "Your email address or a web page of yours."
         }
     }
@@ -107,8 +107,15 @@ struct KeyField: View {
 /// final button) applies it. Leaving the screen without applying keeps the server in use as it was.
 @MainActor @Observable
 final class AlertServerDraft {
-    var url = ""
+    var url = "" {
+        didSet {
+            if let savedServer, token == savedServer.token, (try? AlertServer.address(url)) != savedServer.url {
+                token = ""
+            }
+        }
+    }
     var token = ""
+    private var savedServer: AlertServer?
     private var loaded = false
     var working = false
     var note: String?
@@ -121,8 +128,9 @@ final class AlertServerDraft {
     }
 
     func reset(to store: AlertStore) {
+        savedServer = store.server.flatMap { $0.isBuiltIn ? nil : $0 }
         url = store.enteredURL
-        token = store.server.map { $0.isBuiltIn ? "" : $0.token } ?? ""
+        token = savedServer?.token ?? ""
     }
 
     /// What's typed differs from what's in use.
@@ -192,7 +200,7 @@ struct AlertServerSection: View {
         // The token in a section of its own: a SecureField in the same group as an address is
         // taken for a login, and iOS offers to save the pair as a password.
         Section {
-            SecureField("Token", text: $draft.token)
+            SecureField("Phone invitation", text: $draft.token)
                 .focused(focus, equals: Self.tokenField)
                 .textContentType(.oneTimeCode)
                 .textInputAutocapitalization(.never)

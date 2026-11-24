@@ -12,16 +12,25 @@ export interface Push {
 }
 
 const RELEVANCE = { closed: 1, delays: 0.8, minor: 0.4 } as const;
+// With control characters cleaned below, JSON needs at most three UTF-8 bytes per
+// UTF-16 code unit. These fields leave room for the envelope and both 64-byte IDs
+// within APNs' 4096-byte limit.
+const MAX_TITLE = 120;
+const MAX_SUBTITLE = 160;
 const MAX_BODY = 700;
 
 export function issuesPush(alert: Alert, issues: Issue[], now: number): Push {
   const [first, ...rest] = issues;
   const urgent = issues.some((i) => i.severity !== "minor");
-  const also = rest.length ? `\n\nAlso: ${rest.map((i) => i.title).join("; ")}.` : "";
+  const also = rest.length ? trim(`\n\nAlso: ${rest.map((i) => i.title).join("; ")}.`, MAX_BODY / 2) : "";
   return {
     payload: {
       aps: {
-        alert: { title: alert.name, subtitle: first.title, body: trim(first.detail || first.title, MAX_BODY - also.length) + also },
+        alert: {
+          title: trim(alert.name, MAX_TITLE),
+          subtitle: trim(first.title, MAX_SUBTITLE),
+          body: trim(first.detail || first.title, MAX_BODY - also.length) + also,
+        },
         sound: "default",
         "interruption-level": urgent ? "time-sensitive" : "active",
         "relevance-score": RELEVANCE[first.severity],
@@ -39,7 +48,7 @@ export function clearPush(alert: Alert, now: number): Push {
   return {
     payload: {
       aps: {
-        alert: { title: alert.name, body: `Good service again on ${lineList(alert)}.` },
+        alert: { title: trim(alert.name, MAX_TITLE), body: trim(`Good service again on ${lineList(alert)}.`, MAX_BODY) },
         "interruption-level": "passive",
         "relevance-score": 0.2,
         "thread-id": alert.id,
@@ -58,8 +67,10 @@ export function plannedPush(alert: Alert, issues: Issue[], now: number): Push {
     payload: {
       aps: {
         alert: {
-          title: alert.name,
-          subtitle: issues.length === 1 ? `Planned: ${issues[0].title.replace(/^.*?: /, "")} tomorrow` : `${issues.length} planned works tomorrow`,
+          title: trim(alert.name, MAX_TITLE),
+          subtitle: issues.length === 1
+            ? `Planned: ${trim(issues[0].title.replace(/^.*?: /, ""), MAX_SUBTITLE - "Planned:  tomorrow".length)} tomorrow`
+            : `${issues.length} planned works tomorrow`,
           body: trim(body, MAX_BODY),
         },
         sound: "default",
@@ -82,5 +93,10 @@ export function lineList(alert: Alert): string {
 }
 
 function trim(text: string, max: number): string {
-  return text.length <= max ? text : `${text.slice(0, max - 1).trimEnd()}…`;
+  const truncated = text.length > max;
+  const prefix = truncated ? text.slice(0, max - 1).replace(/[\uD800-\uDBFF]$/, "").trimEnd() : text;
+  // Keep tabs and line breaks. Other non-printing controls and unpaired surrogates
+  // would become six-byte JSON escapes. Unicode mode preserves valid surrogate pairs.
+  const printable = prefix.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\uD800-\uDFFF]/gu, " ");
+  return truncated ? `${printable}…` : printable;
 }
