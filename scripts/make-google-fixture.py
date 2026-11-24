@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Writes PolarisTests/Fixtures/google-routes.json: a hand-written Google Routes answer.
+"""Writes BeelineTests/Fixtures/google-routes.json: a hand-written Google Routes answer.
 
 Google's terms don't allow republishing its responses, so the test fixture is invented, in the
 shape computeRoutes returns for the field mask GoogleRoutesProvider asks for. Six routes from
@@ -150,7 +150,7 @@ routes = [
     ], 180, 220),
 ]
 
-with open("PolarisTests/Fixtures/google-routes.json", "w") as f:
+with open("BeelineTests/Fixtures/google-routes.json", "w") as f:
     json.dump({"routes": routes}, f, indent=1, ensure_ascii=False)
     f.write("\n")
 print("wrote", len(routes), "routes")

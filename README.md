@@ -1,7 +1,6 @@
-# Beeline Home
+# Beeline
 
-Beeline Home is an iOS fork of [Polaris](https://github.com/VDEData/polaris). Its Xcode project,
-scheme and source directories retain their Polaris names. The app’s bundle ID is `com.cloudslope.beeline`.
+Beeline is an iOS fork of [Polaris](https://github.com/VDEData/polaris). The Xcode project and scheme are named `Beeline`. App Store Connect and TestFlight list it as **Beeline Home** under the bundle ID `com.cloudslope.beeline`.
 
 An iOS app for getting around London (and the rest of Great Britain) that asks several
 journey planners the same question and shows every answer in one ranked list, because
@@ -133,20 +132,20 @@ The app runs on iOS 26 and later. Build with Xcode 27.2 and [XcodeGen](https://g
 behind availability checks. Generate the Xcode project from the checked-in project specification.
 
 1. Clone the repo and run `scripts/generate.sh`. It copies `Config/Secrets.example.xcconfig`
-   to `Config/Secrets.xcconfig` (git-ignored) the first time, then writes `Polaris.xcodeproj`.
+   to `Config/Secrets.xcconfig` (git-ignored) the first time, then writes `Beeline.xcodeproj`.
    Run it again whenever you add a file.
-2. Open `Polaris.xcodeproj`, select the `Polaris` scheme, pick an iPhone simulator and run. With no keys at all it works:
+2. Open `Beeline.xcodeproj`, select the `Beeline` scheme, pick an iPhone simulator and run. With no keys at all it works:
    TfL (keyless), Transitous and Apple's estimates answer, and Google is shown as needing a key.
 3. For your own iPhone, set in `Config/Secrets.xcconfig`:
-   - `POLARIS_BUNDLE_ID`, if your team needs a different bundle ID (for example, `com.yourname.beeline`); the widget and
+   - `BEELINE_BUNDLE_ID`, if your team needs a different bundle ID (for example, `com.yourname.beeline`); the widget and
      tests add `.widgets` and `.tests`;
    - `DEVELOPMENT_TEAM`, your Apple team ID (developer.apple.com, Membership).
    A free Apple account can install it for a week at a time, but can't sign the push and
    Time Sensitive entitlements alerts need; for those you need the paid Apple Developer Program.
    If signing complains about them on a free account, delete those two keys from
-   `Polaris/Resources/Polaris.entitlements` in your copy.
-4. TfL and Transitous requests identify Beeline Home with its public repository URL. Set
-   `POLARIS_CONTACT` to change that build-time contact. A personal contact entered in Settings
+   `Beeline/Resources/Beeline.entitlements` in your copy.
+4. TfL and Transitous requests identify Beeline with its public repository URL. Set
+   `BEELINE_CONTACT` to change that build-time contact. A personal contact entered in Settings
    is sent only to Transitous.
 
 `Config/Base.xcconfig` holds the defaults and includes your `Secrets.xcconfig` last, so
@@ -168,8 +167,8 @@ anything in the xcconfig is compiled into the app, where anyone with the `.ipa` 
 |---|---|---|
 | `GOOGLE_ROUTES_API_KEY` | [Google Cloud console](https://console.cloud.google.com): enable **Routes API**, create an API key restricted to iOS apps with your bundle ID and to the Routes API only | No Google routes |
 | `TFL_APP_KEY` | [TfL API portal](https://api-portal.tfl.gov.uk): subscribe, copy the primary key | TfL still answers, at 50 requests a minute |
-| `POLARIS_ALERTS_URL`, `POLARIS_ALERTS_TOKEN` | Your own alerts server, below | Alerts are off |
-| `POLARIS_CONTACT` | A public contact for the build's open-data requests | Uses the Beeline repository URL by default |
+| `BEELINE_ALERTS_URL`, `BEELINE_ALERTS_TOKEN` | Your own alerts server, below | Alerts are off |
+| `BEELINE_CONTACT` | A public contact for the build's open-data requests | Uses the Beeline repository URL by default |
 
 ## Run your own alerts server
 
@@ -188,7 +187,7 @@ send notifications to your build of the app, and sign the app with the push enti
    `database_id` in it. `pnpm run deploy` and `pnpm run migrate` lay that file over
    `wrangler.jsonc`, and refuse to run while the id is still the placeholder.
 3. In the same file set `APNS_TEAM_ID` (your team ID) and `APNS_TOPIC` (exactly your
-   `POLARIS_BUNDLE_ID`). Add a `routes` entry only if you want your own domain; otherwise the
+   `BEELINE_BUNDLE_ID`). Add a `routes` entry only if you want your own domain; otherwise the
    Worker is served at `beeline-alerts.<your-subdomain>.workers.dev`.
 4. `pnpm run migrate` creates the tables.
 5. Make an APNs key: developer.apple.com, Certificates, Identifiers & Profiles, Keys, a new
@@ -223,7 +222,7 @@ and the phone retries the removal on a later launch.
 The alerts worker checks line and mode selections against TfL's rail catalog. Each enrollment can request up to 12 registrations, status refreshes or notification tests per minute at a Cloudflare location. The scheduler uses separate batches for each mode and retries incomplete results at the next check.
 
 Development: `pnpm test` runs offline against the recorded TfL responses in
-`PolarisTests/Fixtures`, which the app's tests share (`alert-contract.json` is the JSON the
+`BeelineTests/Fixtures`, which the app's tests share (`alert-contract.json` is the JSON the
 app sends), and `pnpm exec tsc --noEmit` type-checks. To run it locally, put `APP_TOKEN=`
 some test value in `.dev.vars` (see `.dev.vars.example`), `pnpm run migrate:local`, then
 `pnpm run dev`; the simulator reaches it at `http://localhost:8787` (plain http is accepted
@@ -232,13 +231,13 @@ for localhost only). To use recorded TfL answers instead of TfL, serve them over
 
 ## Being a good client
 
-Every source here is free or has a free tier, run by people who ask for light use. Beeline Home
+Every source here is free or has a free tier, run by people who ask for light use. Beeline
 keeps to these limits, and changes should too:
 
 - **Transitous** (volunteer-run): one request per search, never fanned out into variants.
   Departure boards are one stop-times request per board as it is shown, kept a minute;
   during Go only the next ride's board refreshes, once a minute. A descriptive User-Agent
-  with `POLARIS_CONTACT`.
+  with `BEELINE_CONTACT`.
 - **TfL**: network status is two requests per search, kept three minutes. Live buses are one
   arrivals request every 30 seconds while a bus line is on the map, and each line's route
   once per launch. The alerts server asks TfL only while someone is inside their travel
@@ -268,12 +267,12 @@ keeps to these limits, and changes should too:
 ## Tests
 
 Everything runs offline: the app's tests parse recorded TfL and Transitous responses and a
-hand-written Google Routes answer in `PolarisTests/Fixtures` (Google's terms don't allow
+hand-written Google Routes answer in `BeelineTests/Fixtures` (Google's terms don't allow
 republishing its responses; `scripts/make-google-fixture.py` writes that one), and the Worker's
 tests share the TfL recordings.
 
 ```sh
-xcodebuild test -project Polaris.xcodeproj -scheme Polaris -destination 'platform=iOS Simulator,name=iPhone 17'
+xcodebuild test -project Beeline.xcodeproj -scheme Beeline -destination 'platform=iOS Simulator,name=iPhone 17'
 cd worker && pnpm test && pnpm exec tsc --noEmit
 ```
 
@@ -285,13 +284,13 @@ MIT. See `LICENSE`.
 
 ## Layout
 
-- `Polaris/Providers`: one file per source: request, response DTOs, mapping to `Journey`; `DepartureProvider` for boards and nearby departures; `TfLBuses` for live bus positions (`LiveBusStore` keeps them fresh).
-- `Polaris/Engine`: `JourneyMerger` (same journey from several sources), `JourneyRanker` (sorts, filters, folding), `SearchModel` (fan-out, live status), `LiveTrip` and `PathProgress` (Go: legs, walking progress, connections).
-- `Polaris/Views`: `RootView` (map plus sheet), `MapCanvas`, then one page per step: `HomeSheet`, `ResultsSheet`, `JourneySheet`, `BoardSheet`, `LineSheet` (a line at a stop near you, live), `LiveGuide`.
-- `Polaris/Shared` and `PolarisWidgets`: the trip's Live Activity (the attributes are compiled into both targets).
+- `Beeline/Providers`: one file per source: request, response DTOs, mapping to `Journey`; `DepartureProvider` for boards and nearby departures; `TfLBuses` for live bus positions (`LiveBusStore` keeps them fresh).
+- `Beeline/Engine`: `JourneyMerger` (same journey from several sources), `JourneyRanker` (sorts, filters, folding), `SearchModel` (fan-out, live status), `LiveTrip` and `PathProgress` (Go: legs, walking progress, connections).
+- `Beeline/Views`: `RootView` (map plus sheet), `MapCanvas`, then one page per step: `HomeSheet`, `ResultsSheet`, `JourneySheet`, `BoardSheet`, `LineSheet` (a line at a stop near you, live), `LiveGuide`.
+- `Beeline/Shared` and `BeelineWidgets`: the trip's Live Activity (the attributes are compiled into both targets).
 - `worker/`: the alerts server: `match.ts` (which disruptions touch your stretch), `policy.ts` (when to tell you), `checks.ts` (the cron), `apns.ts`.
-- `PolarisTests`: parsers against recorded Google/TfL/Transitous responses, boards, walking progress and leg-by-leg tracking, and the merge and ranking rules.
-- `Polaris/Design/Theme.swift` defines the map and journey colours. The app and its trip Live Activity always use a dark appearance.
+- `BeelineTests`: parsers against recorded Google/TfL/Transitous responses, boards, walking progress and leg-by-leg tracking, and the merge and ranking rules.
+- `Beeline/Design/Theme.swift` defines the map and journey colours. The app and its trip Live Activity always use a dark appearance.
 
 Launch flags for checking screens without tapping (Debug only): `-setup` shows the first-run setup step; `-demo -demoReplan
 offer|wait|early` opens Go on a canned trip early onto the Bakerloo, with canned boards

@@ -4,7 +4,7 @@ import type { Alert, Segment } from "../src/types.ts";
 
 /** Recorded TfL responses and the app's contract live with the app's tests. */
 export function fixture(name: string): any {
-  return JSON.parse(readFileSync(fileURLToPath(new URL(`../../PolarisTests/Fixtures/${name}`, import.meta.url)), "utf8"));
+  return JSON.parse(readFileSync(fileURLToPath(new URL(`../../BeelineTests/Fixtures/${name}`, import.meta.url)), "utf8"));
 }
 
 export const contract = () => fixture("alert-contract.json");

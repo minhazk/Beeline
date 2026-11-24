@@ -25,7 +25,7 @@ export interface StationDisruption {
 }
 
 const BASE = "https://api.tfl.gov.uk";
-const USER_AGENT = "Beeline Home alerts (personal journey planner)";
+const USER_AGENT = "Beeline alerts (personal journey planner)";
 
 export function lineStatusURL(lineIds: string[], range?: { from: number; to: number }): string {
   const ids = [...new Set(lineIds)].sort().map(encodeURIComponent).join(",");
