@@ -151,10 +151,9 @@ private struct RouteSourcesView: View {
 
 struct ServiceConnectionsView: View {
     @FocusState private var editingKey: String?
-    @State private var serverDraft = AlertServerDraft()
 
     var body: some View {
-        Form { ConnectionSections(draft: serverDraft, focus: $editingKey) }
+        Form { ConnectionSections(focus: $editingKey) }
             .navigationTitle("Service connections")
             .keepsSheetWhenUnfolded(true)
     }

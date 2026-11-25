@@ -104,11 +104,13 @@ struct ProviderParsingTests {
         }
     }
 
-    @Test func onlyTransitousReceivesTheContactEnteredOnThePhone() {
-        let contact = "rider@example.org"
+    @Test func onlyTimetableProvidersReceiveTheBuiltInContact() {
+        let contact = (Bundle.main.object(forInfoDictionaryKey: "BeelineContact") as? String).flatMap(Contact.valid)
         for host in ["routes.googleapis.com", "api.tfl.gov.uk", "alerts.example.org", "api.transitous.org"] {
-            let agent = HTTP.userAgent(for: URL(string: "https://\(host)/"), transitousContact: contact)
-            #expect(agent.contains(contact) == (host == "api.transitous.org"))
+            let agent = HTTP.userAgent(for: URL(string: "https://\(host)/"))
+            let identifiesApp = ["api.transitous.org", "api.tfl.gov.uk"].contains(host)
+            let suffix = identifiesApp ? contact.map { " (\($0))" } ?? "" : ""
+            #expect(agent == HTTP.appUserAgent + suffix)
         }
     }
 
