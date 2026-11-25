@@ -31,8 +31,12 @@ struct AlertStoreTests {
         /// What a host answers instead of 200 and `reply`.
         var refusing: [String: (status: Int, body: String)] = [:]
         var reply = Data(#"{"checkedAt":"2026-11-24T12:00:00Z","alerts":[]}"#.utf8)
+        var code = 200
+        /// Runs while a request is out, before its reply.
+        var onSend: (() -> Void)?
         func send(_ request: URLRequest) throws -> (Data, URLResponse) {
             requests.append(request)
+            onSend?()
             let host = request.url?.host() ?? ""
             if failing.contains(host) { throw URLError(.cannotConnectToHost) }
             if let refusal = refusing[host] {
@@ -42,7 +46,7 @@ struct AlertStoreTests {
             let isStatus = request.httpMethod == "POST" && request.url?.lastPathComponent == "status"
             let isTest = request.httpMethod == "POST" && request.url?.lastPathComponent == "test"
             let answer = isStatus ? reply : agreement ?? Data((isTest ? #"{"status":200,"gone":false}"# : #"{"ok":true,"pushes":true}"#).utf8)
-            return (answer, HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+            return (answer, HTTPURLResponse(url: request.url!, statusCode: isStatus ? code : 200, httpVersion: nil, headerFields: nil)!)
         }
         /// What a change or a test is answered with, when not the server's usual agreement.
         var agreement: Data?
@@ -56,6 +60,31 @@ struct AlertStoreTests {
         alert.segments = [.init(line: .init(id: "central", name: "Central"), mode: "tube")]
         return alert
     }
+
+    /// The two watches `alert-status-partial.json` answers for.
+    static func fixtureAlerts() -> [RouteAlert] {
+        var elizabeth = validAlert(), district = validAlert()
+        elizabeth.id = "6F1C2E1A-0B8E-4D59-9C3A-2E7A5D9B1C11"
+        elizabeth.name = "Liverpool Street → Canary Wharf"
+        district.id = "0D7A6C55-41C2-4E0B-8B3F-5A1E2C9D4F22"
+        district.name = "District line"
+        return [elizabeth, district]
+    }
+
+    static func defaults(with alerts: [RouteAlert]) -> UserDefaults {
+        let defaults = UserDefaults(suiteName: "AlertStatusTests.\(UUID().uuidString)")!
+        defaults.set(try! JSONEncoder().encode(alerts), forKey: "alerts")
+        return defaults
+    }
+
+    /// Good service on `checked`; `unchecked` TfL couldn't be asked about.
+    static func reply(checked: [RouteAlert], unchecked: [RouteAlert] = [], at date: Date = .now) -> Data {
+        let entries = checked.map { #"{"id":"\#($0.id)","issues":[],"upcoming":[]}"# }.joined(separator: ",")
+        let skipped = unchecked.map { "\"\($0.id)\"" }.joined(separator: ",")
+        return Data(#"{"checkedAt":"\#(Time.isoString(date))","alerts":[\#(entries)],"unchecked":[\#(skipped)]}"#.utf8)
+    }
+
+    static let tflDown = Data(#"{"error":"TfL could not check every line. Try again later."}"#.utf8)
 
     func store(secrets: Secrets = Secrets(), wire: Wire = Wire(), registered: Bool = true,
                builtIn: (String, String)? = ("https://built.example.com", "built-token"),
@@ -314,6 +343,74 @@ struct AlertStoreTests {
         #expect(store.alerts == alerts)
         let legacy = RouteAlert.Delivery(alerts + [Self.validAlert()])
         #expect(legacy.ready.count == 30 && legacy.pending.count == 1)
+    }
+
+    @Test func anAlertIsCheckingUntilAskedAndWhileAskedAgain() async throws {
+        let wire = Wire(), store = store(wire: wire)
+        let id = try #require(store.alerts.first?.id)
+        #expect(store.verdict(for: id) == .checking, "not asked yet")
+        wire.code = 503
+        wire.reply = Self.tflDown
+        await store.refreshStatus(force: true)
+        #expect(store.verdict(for: id) == .unavailable)
+        var during: AlertStore.Verdict?
+        wire.onSend = { during = store.verdict(for: id) }
+        await store.refreshStatus(force: true)
+        #expect(during == .checking)
+        #expect(store.verdict(for: id) == .unavailable && !store.isChecking)
+    }
+
+    @Test func aPartialAnswerLeavesOutOnlyTheAlertTfLCouldntCheck() async throws {
+        let wire = Wire(), alerts = Self.fixtureAlerts()
+        wire.reply = try ProviderParsingTests.fixture("alert-status-partial")
+        let store = store(wire: wire, defaults: Self.defaults(with: alerts))
+        await store.refreshStatus(force: true)
+        let checked = try #require(store.verdict(for: alerts[0].id).entry)
+        #expect(checked.issues.map(\.level) == [.delays])
+        #expect(checked.upcoming.isEmpty && checked.upcomingUnknown)
+        #expect(store.verdict(for: alerts[1].id) == .unavailable)
+        #expect(store.unchecked == [alerts[1].id])
+        #expect(store.statusProblem == "TfL couldn't check District line just now. Try again later.")
+        #expect(store.checkedAt == Time.iso("2026-11-25T08:14:03.512Z"))
+    }
+
+    @Test func aFailedCheckShowsNoOldVerdictUntilTheNextAnswer() async throws {
+        let wire = Wire(), alerts = Self.fixtureAlerts()
+        let store = store(wire: wire, defaults: Self.defaults(with: alerts))
+        wire.reply = Self.reply(checked: alerts)
+        await store.refreshStatus(force: true)
+        let checkedAt = try #require(store.checkedAt)
+        #expect(store.status.count == 2 && store.statusProblem == nil)
+
+        wire.code = 503
+        wire.reply = Self.tflDown
+        await store.refreshStatus(force: true)
+        let verdicts = alerts.map { store.verdict(for: $0.id) }
+        #expect(verdicts == [.unavailable, .unavailable], "not the last answer's Good")
+        #expect(store.statusProblem == "TfL could not check every line. Try again later.")
+        #expect(store.checkedAt == checkedAt)
+
+        wire.code = 200
+        wire.reply = Self.reply(checked: alerts)
+        await store.refreshStatus()
+        #expect(wire.requests.count == 3, "a minute hasn't passed, but nothing has an answer")
+        let entries = alerts.map { store.verdict(for: $0.id).entry }
+        #expect(entries.allSatisfy { $0?.issues.isEmpty == true })
+        #expect(store.unchecked.isEmpty && store.statusProblem == nil)
+    }
+
+    @Test func aRecentAnswerHoldsOffTheNextCheckOnlyOnceEveryAlertHasOne() async {
+        let wire = Wire(), alerts = Self.fixtureAlerts()
+        let store = store(wire: wire, defaults: Self.defaults(with: alerts))
+        wire.reply = Self.reply(checked: [alerts[0]], unchecked: [alerts[1]])
+        await store.refreshStatus(force: true)
+        await store.refreshStatus()
+        #expect(wire.requests.count == 2, "one still without an answer is asked about again")
+        wire.reply = Self.reply(checked: alerts)
+        await store.refreshStatus()
+        await store.refreshStatus()
+        #expect(wire.requests.count == 3)
+        #expect(store.unchecked.isEmpty && store.statusProblem == nil)
     }
 
     @Test func aFailedRemovalIsSaid() async throws {
@@ -586,10 +683,22 @@ struct AlertStoreTests {
     @Test func serverTextIsKeptShort() throws {
         let long = String(repeating: "x", count: 10_000)
         let issues = (0..<40).map { _ in #"{"severity":"closed","title":"\#(long)","detail":"\#(long)"}"# }.joined(separator: ",")
-        let json = #"{"checkedAt":"2026-11-24T12:00:00Z","alerts":[{"id":"a","issues":[\#(issues)],"upcoming":[]}]}"#
+        let ids = (0..<200).map { _ in "\"\(long)\"" }.joined(separator: ",")
+        let json = #"{"checkedAt":"2026-11-24T12:00:00Z","alerts":[{"id":"a","issues":[\#(issues)],"upcoming":[]}],"unchecked":[\#(ids)]}"#
         let status = try AlertStatus.decode(Data(json.utf8))
         let entry = try #require(status.alerts.first)
         #expect(entry.issues.count == AlertStatus.maxIssues)
         #expect(entry.issues.allSatisfy { $0.title.count <= AlertStatus.maxTitle && $0.detail.count <= AlertStatus.maxDetail })
+        #expect(status.unchecked.count == 64 && status.unchecked.allSatisfy { $0.count == 64 })
+    }
+
+    @Test func readsAPartialAnswer() throws {
+        let status = try AlertStatus.decode(ProviderParsingTests.fixture("alert-status-partial"))
+        let alerts = Self.fixtureAlerts()
+        #expect(status.alerts.map(\.id) == [alerts[0].id])
+        #expect(status.alerts[0].upcomingUnknown && status.alerts[0].upcoming.isEmpty)
+        #expect(status.unchecked == [alerts[1].id])
+        let older = try AlertStatus.decode(Data(#"{"checkedAt":"2026-11-24T12:00:00Z","alerts":[{"id":"a","issues":[],"upcoming":[]}]}"#.utf8))
+        #expect(older.unchecked.isEmpty && !older.alerts[0].upcomingUnknown, "an older server's answer had everything checked")
     }
 }
