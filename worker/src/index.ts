@@ -140,8 +140,10 @@ app.put("/v1/devices/:token", async (c) => {
   const alerts = valid.alerts(body.alerts);
   if (!alerts.length) throw new valid.Invalid("A registration needs at least one scheduled alert");
   const environment = valid.environment(body.environment), timeZone = valid.timeZone(body.timeZone);
-  // The phone's push-to-start token, for saved lines that start a Live Activity themselves.
-  const startToken = body.startToken == null ? null : valid.deviceToken(String(body.startToken));
+  // The phone's push-to-start token, for saved lines that start a Live Activity themselves. One
+  // that isn't a token is left out, not a reason to refuse the alerts.
+  let startToken: string | null = null;
+  try { if (body.startToken != null) startToken = valid.deviceToken(String(body.startToken)); } catch {}
   validateLines(alerts, await lineCatalog({ key: c.env.TFL_APP_KEY, ops: tflRequests(c.env, 0) }));
   // The order of arrival is only kept for as long as removals are remembered: a request that has
   // been on its way longer than that (an upload that crawled) is asked to come again.
@@ -299,7 +301,8 @@ app.put("/v1/activities/:token", async (c) => {
   ).bind(enrollment, MAX_ACTIVITIES).run();
   const state = (await lookup(c.env, [follow], now, tfl))(follow);
   if (state) await c.env.DB.prepare("UPDATE activities SET state = ?1 WHERE token = ?2 AND ends_at = ?3").bind(JSON.stringify(state), token, ends).run();
-  return c.json({ ok: true, state: state ?? null });
+  // Whether the server can push at all: without its push key the phone keeps it fresh itself.
+  return c.json({ ok: true, state: state ?? null, pushes: canPush(c.env) });
 });
 
 app.delete("/v1/activities/:token", async (c) => {

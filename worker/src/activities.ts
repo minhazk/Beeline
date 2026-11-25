@@ -71,8 +71,9 @@ export function shortNotice(title: string, lineName: string): string {
 /** Everything needed to say what each of these follows shows now: one request per station and
  * line for the trains, the line's station order, and TfL's status for trouble on the way, within
  * what the invocation may still ask (`tfl`). A follow whose trains TfL didn't give comes back
- * undefined, and keeps what it last showed. */
-export async function lookup(env: Env, follows: Segment[], now: number, tfl: TfLAccess): Promise<(follow: Segment) => ContentState | undefined> {
+ * undefined, and keeps what it last showed; one whose trouble TfL didn't say keeps the notice it
+ * showed (`before`), rather than clearing it and putting it back a minute later. */
+export async function lookup(env: Env, follows: Segment[], now: number, tfl: TfLAccess): Promise<(follow: Segment, before?: ContentState) => ContentState | undefined> {
   const maps = await loadLineMaps(follows.map((f) => f.line.id), tfl, now);
   const boards = new Map<string, Prediction[]>();
   const at = (f: Segment) => `${f.line.id}|${f.mode}|${f.from?.id}`;
@@ -81,24 +82,26 @@ export async function lookup(env: Env, follows: Segment[], now: number, tfl: TfL
     catch (error) { console.error("trains unavailable", f.line.id, String(error)); }
   });
   let lines: LineStatus[] = [], stations: StationDisruption[] = [];
+  // Lines and modes whose trouble TfL didn't say this time: every one, until it does.
+  let unknownLines: Set<string> | undefined, unknownModes: Set<string> | undefined;
   try {
     const catalog = await lineCatalog(tfl);
-    [lines, stations] = await Promise.all([
-      lineChecks(follows, catalog, tfl).then((r) => r.lines),
-      stationChecks(follows, tfl).then((r) => r.stations),
-    ]);
+    const [lineReport, stationReport] = await Promise.all([lineChecks(follows, catalog, tfl), stationChecks(follows, tfl)]);
+    [lines, stations, unknownLines, unknownModes] = [lineReport.lines, stationReport.stations, lineReport.missing, stationReport.missing];
   } catch {
     // Trouble is extra: the trains still go out without it.
   }
-  return (follow) => {
+  return (follow, before) => {
     const map = maps.get(follow.line.id), board = boards.get(at(follow));
     if (!map || !board) return undefined;
     const segment = withStations(follow, map);
     const ride: Alert = { id: "live", name: "", days: [1, 2, 3, 4, 5, 6, 7], windows: [{ start: 0, end: 1439 }], minorDelays: true, segments: [segment], direction: "out" };
-    const [issue] = issuesFor(ride, lines, stations, { at: now }, maps);
+    const known = unknownLines !== undefined && !unknownLines.has(follow.line.id) && !unknownModes!.has(follow.mode);
+    const [issue] = known ? issuesFor(ride, lines, stations, { at: now }, maps) : [];
+    const notice = known ? issue && shortNotice(issue.title, follow.line.name) : before?.notice;
     return {
       trains: nextTrains(board, follow, map, now),
-      ...(issue ? { notice: shortNotice(issue.title, follow.line.name) } : {}),
+      ...(notice ? { notice } : {}),
       updated: sec(now),
       live: true,
     };
@@ -157,6 +160,9 @@ export function startPush(attributes: Attributes, state: ContentState, now: numb
         attributes,
         "content-state": state,
         "stale-date": staleDate(state, now),
+        // iOS 18 and later only gives the started one a push token of its own, for these updates,
+        // when the start asks for it.
+        "input-push-token": 1,
         // Starting one needs an alert; no sound, so it lights the screen and no more.
         alert: { title: `${attributes.line} from ${attributes.stop}`, body: attributes.towards ? `Next trains to ${attributes.towards}` : "Next trains" },
       },
@@ -228,7 +234,9 @@ interface StartRow {
   time_zone: string;
   alerts: string;
   start_token: string;
+  /** Each time started, as "alert id@when it began" (ms), to when it ends. */
   started: string;
+  state: string;
 }
 
 interface Due {
@@ -240,24 +248,33 @@ interface Due {
 }
 
 /** Saved lines set to start a Live Activity, whose travel time has begun and has more than ten
- * minutes left, and that haven't had one this time. */
+ * minutes left, and that haven't had one this time; one a run for each alert. A phone whose
+ * invitation has been taken out (its day's grace, `revoked`) has none started. */
 export function dueStarts(devices: StartRow[], now: number): Due[] {
   return devices.flatMap((device) => {
     const alerts = JSON.parse(device.alerts) as Alert[];
-    const started = JSON.parse(device.started || "{}") as Record<string, string>;
+    const started = startedTimes(device.started);
+    if ((JSON.parse(device.state || "{}") as { revoked?: number }).revoked !== undefined) return [];
     return alerts.flatMap((alert) => {
       if (!alert.liveActivity) return [];
       for (const window of activeWindows(alert, now, device.time_zone)) {
         const { from, to } = span(window, now, device.time_zone);
-        const occurrence = String(from);
+        const occurrence = `${alert.id}@${from}`;
         const follow = followFor(alert, window);
-        if (!follow || started[alert.id] === occurrence || to - now < 10 * MINUTE) continue;
+        if (!follow || started[occurrence] !== undefined || to - now < 10 * MINUTE) continue;
         return [{ device, alert, follow, occurrence, ends: to }];
       }
       return [];
     });
   });
 }
+
+const startedTimes = (text: string): Record<string, number> => {
+  try {
+    const parsed = JSON.parse(text || "{}") as Record<string, unknown>;
+    return Object.fromEntries(Object.entries(parsed).filter((e): e is [string, number] => typeof e[1] === "number"));
+  } catch { return {}; }
+};
 
 // MARK: Every minute
 
@@ -276,13 +293,33 @@ const parse = (state: string): ContentState | undefined => {
 /** A token APNs will never take again: the activity ended on the phone, or the app was deleted. */
 const dead = (r: Sent) => r.gone || r.status === 410 || r.reason === "BadDeviceToken";
 
+/** One run at a time: a run still going (APNs or TfL slow) when the next minute's begins would
+ * push the same news, and start the same Live Activity, twice. By the clock, as the alerts' run. */
+const LIVE_LEASE = 55_000;
+
 export async function runActivities(env: Env, now = Date.now()): Promise<{ followed: number; sent: number; started: number; ended: number }> {
   const result = { followed: 0, sent: 0, started: 0, ended: 0 };
   // Without the push key nothing can be shown, so nothing is asked of TfL.
   if (!canPush(env)) return result;
-  const { results: rows } = await env.DB.prepare("SELECT token, environment, follow, ends_at, state FROM activities").all<ActivityRow>();
+  const turn = Date.now();
+  const claimed = await env.DB.prepare(`INSERT INTO meta (key, value, updated_at) VALUES ('live_run', '', ?1)
+    ON CONFLICT(key) DO UPDATE SET updated_at = ?1 WHERE meta.updated_at < ?1 - ${LIVE_LEASE}`).bind(turn).run();
+  if (!claimed.meta?.changes) return result;
+  try {
+    return await runActivitiesTurn(env, now, result);
+  } finally {
+    await env.DB.prepare("UPDATE meta SET updated_at = 0 WHERE key = 'live_run' AND updated_at = ?1").bind(turn).run().catch(() => {});
+  }
+}
+
+async function runActivitiesTurn(env: Env, now: number, result: { followed: number; sent: number; started: number; ended: number }) {
+  const { results: all } = await env.DB.prepare("SELECT token, environment, follow, ends_at, state FROM activities ORDER BY token").all<ActivityRow>();
+  // A different one first each minute, so when there's more news than one run can push, none
+  // waits for good.
+  const shift = all.length ? Math.floor(now / MINUTE) % all.length : 0;
+  const rows = [...all.slice(shift), ...all.slice(0, shift)];
   const { results: devices } = await env.DB.prepare(
-    "SELECT token, environment, time_zone, alerts, start_token, started FROM devices WHERE start_token IS NOT NULL",
+    "SELECT token, environment, time_zone, alerts, start_token, started, state FROM devices WHERE start_token IS NOT NULL",
   ).all<StartRow>();
   // Workers Free gives an invocation 50 requests and 50 D1 queries: at most `maxPushes` pushes a
   // run (ends, updates and starts together), the rest the next minute, and TfL what's left.
@@ -310,7 +347,7 @@ export async function runActivities(env: Env, now = Date.now()): Promise<{ follo
   const show = await lookup(env, [...live.map((r) => r.followed), ...due.map((d) => d.follow)], now, tfl);
 
   for (const row of live) {
-    const state = show(row.followed);
+    const state = show(row.followed, parse(row.state));
     if (!state) continue;
     result.followed++;
     const priority = urgency(parse(row.state), state, now);
@@ -350,10 +387,11 @@ export async function runActivities(env: Env, now = Date.now()): Promise<{ follo
         continue;
       }
       result.started++;
-      // Read again: another start for the same phone may have been recorded meanwhile.
+      // Read again: another start for the same phone may have been recorded meanwhile. Times
+      // that have ended are forgotten.
       const current = await env.DB.prepare("SELECT started FROM devices WHERE token = ?1").bind(device.token).first<{ started: string }>();
-      const started = { ...(JSON.parse(current?.started || "{}") as Record<string, string>), [start.alert.id]: start.occurrence };
-      for (const id of Object.keys(started)) if (!(JSON.parse(device.alerts) as Alert[]).some((a) => a.id === id)) delete started[id];
+      const started = { ...startedTimes(current?.started ?? ""), [start.occurrence]: start.ends };
+      for (const [key, ends] of Object.entries(started)) if (ends <= now) delete started[key];
       await env.DB.prepare("UPDATE devices SET started = ?1 WHERE token = ?2").bind(JSON.stringify(started), device.token).run();
     } catch (error) {
       console.error("Live Activity start failed", String(error));

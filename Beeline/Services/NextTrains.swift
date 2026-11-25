@@ -21,6 +21,10 @@ final class NextTrains {
     private(set) var problem: String?
 
     @ObservationIgnored private var watched = Set<String>()
+    /// Activities the server has taken on and can push to: the phone leaves those to it.
+    @ObservationIgnored private var serverFollows = Set<String>()
+    /// Each activity's push token as the server last heard it, so a new one replaces it there.
+    @ObservationIgnored private var registeredTokens: [String: String] = [:]
     @ObservationIgnored private var refreshing: Task<Void, Never>?
     @ObservationIgnored private var resumed = false
 
@@ -65,7 +69,8 @@ final class NextTrains {
                                                 pushType: pushes ? .token : nil)
             showing = request.key
             watch(activity)
-            if !pushes, let refresh = request.refresh { keepFresh(activity, with: refresh) }
+            // Until the server says it has taken it on (or when it can't), the phone keeps it fresh.
+            keepFresh(activity, with: request.refresh)
             Self.log.notice("Started next-train Live Activity \(activity.id, privacy: .public)")
         } catch {
             problem = "Couldn't show it on the Lock Screen."
@@ -92,8 +97,15 @@ final class NextTrains {
         guard !resumed else { return }
         resumed = true
         for activity in Activity<NextTrainAttributes>.activities where [.active, .stale].contains(activity.activityState) {
+            // Past its time, and nobody ended it (the server couldn't, or never followed it).
+            if activity.attributes.ends <= Date.now.timeIntervalSince1970 {
+                nonisolated(unsafe) let activity = activity
+                Task { await activity.end(nil, dismissalPolicy: .immediate) }
+                continue
+            }
             showing = activity.attributes.key
             watch(activity)
+            keepFresh(activity, with: nil)
         }
         Task {
             for await activity in Activity<NextTrainAttributes>.activityUpdates {
@@ -104,6 +116,7 @@ final class NextTrains {
                 }
                 showing = activity.attributes.key
                 watch(activity)
+                keepFresh(activity, with: nil)
             }
         }
         Task {
@@ -127,6 +140,8 @@ final class NextTrains {
         Task {
             for await state in activity.activityStateUpdates where state == .dismissed || state == .ended {
                 watched.remove(id)
+                serverFollows.remove(id)
+                registeredTokens[id] = nil
                 if showing == key, !Activity<NextTrainAttributes>.activities.contains(where: { $0.id != id && $0.attributes.key == key }) {
                     showing = nil
                     refreshing?.cancel()
@@ -140,28 +155,45 @@ final class NextTrains {
     }
 
     /// Hands the server the activity's push token and what it follows; shows its answer at once.
+    /// A token that replaces an earlier one has the earlier one forgotten there.
     private func register(_ activity: Activity<NextTrainAttributes>, token: String) async {
         guard let follow = activity.attributes.follow else { return }
         struct Body: Encodable { var environment: String; var follow: NextTrainAttributes.Follow; var ends: Double }
-        struct Reply: Decodable { var state: NextTrainAttributes.ContentState? }
+        struct Reply: Decodable { var state: NextTrainAttributes.ContentState?; var pushes: Bool? }
+        let id = activity.id
         do {
             let body = try JSONEncoder().encode(Body(environment: AlertStore.environment, follow: follow, ends: activity.attributes.ends))
-            guard let data = try await AlertStore.shared.sendToServer("PUT", path: "activities/\(token)", body: body),
-                  let state = try JSONDecoder().decode(Reply.self, from: data).state else { return }
+            guard let data = try await AlertStore.shared.sendToServer("PUT", path: "activities/\(token)", body: body) else { return }
+            let reply = try JSONDecoder().decode(Reply.self, from: data)
+            if let old = registeredTokens[id], old != token {
+                _ = try? await AlertStore.shared.sendToServer("DELETE", path: "activities/\(old)")
+            }
+            registeredTokens[id] = token
+            // A server without its push key takes the activity but can't show anything on it.
+            if reply.pushes != false { serverFollows.insert(id) } else { serverFollows.remove(id) }
+            guard let state = reply.state else { return }
             nonisolated(unsafe) let activity = activity
             await activity.update(ActivityContent(state: state, staleDate: state.staleDate(after: .now)))
         } catch {
+            serverFollows.remove(id)
             Self.log.error("Next-train registration failed: \(String(describing: error), privacy: .public)")
         }
     }
 
-    /// Without the server: the timetable again each minute while Beeline is open.
-    private func keepFresh(_ activity: Activity<NextTrainAttributes>, with refresh: @escaping @Sendable () async throws -> [Departure]) {
+    /// Each minute while Beeline is open: ends it once its time is up, and, unless the server has
+    /// taken it on, shows the timetable again (`refresh`, when there's a way to ask).
+    private func keepFresh(_ activity: Activity<NextTrainAttributes>, with refresh: (@Sendable () async throws -> [Departure])?) {
         nonisolated(unsafe) let activity = activity
+        let id = activity.id, ends = Date(timeIntervalSince1970: activity.attributes.ends)
+        refreshing?.cancel()
         refreshing = Task {
             while !Task.isCancelled {
-                do { try await Task.sleep(for: .seconds(60)) } catch { return }
-                guard let departures = try? await refresh(), !Task.isCancelled else { continue }
+                do { try await Task.sleep(for: .seconds(max(1, min(60, ends.timeIntervalSinceNow)))) } catch { return }
+                if Date.now >= ends {
+                    await activity.end(nil, dismissalPolicy: .immediate)
+                    return
+                }
+                guard let refresh, !serverFollows.contains(id), let departures = try? await refresh(), !Task.isCancelled else { continue }
                 let state = Self.state(departures, live: false)
                 await activity.update(ActivityContent(state: state, staleDate: state.staleDate(after: .now)))
             }

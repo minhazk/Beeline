@@ -36,6 +36,7 @@ test("what the server sends is what the app decodes", () => {
   assert.equal(push["attributes-type"], "NextTrainAttributes", "the Swift type's name");
   assert.deepEqual(push["content-state"], state);
   assert.equal(push.alert.title, "Central from Redbridge");
+  assert.equal(push["input-push-token"], 1, "or iOS gives the started one no token for updates");
 });
 
 test("a time going back follows the last stretch the other way; whole lines and buses follow nothing", () => {
@@ -75,12 +76,20 @@ test("notices say the trouble in a few words", () => {
 });
 
 test("a saved line starts one when its time begins, once, and not in its last ten minutes", () => {
-  const device = { token: "ab".repeat(32), environment: "sandbox" as const, time_zone: "Europe/London", alerts: JSON.stringify([commute]), start_token: "ef".repeat(40), started: "{}" };
+  const device = { token: "ab".repeat(32), environment: "sandbox" as const, time_zone: "Europe/London", alerts: JSON.stringify([commute]), start_token: "ef".repeat(40), started: "{}", state: "{}" };
   const [due] = dueStarts([device], NOW);
   assert.equal(due.alert.id, "commute");
   assert.equal(due.follow.from!.name, "Redbridge");
   assert.equal(due.ends, Date.parse("2026-11-25T20:00:00Z"));
-  assert.deepEqual(dueStarts([{ ...device, started: JSON.stringify({ commute: due.occurrence }) }], NOW), [], "already started this time");
+  assert.deepEqual(dueStarts([{ ...device, started: JSON.stringify({ [due.occurrence]: due.ends }) }], NOW), [], "already started this time");
+  assert.deepEqual(dueStarts([{ ...device, state: JSON.stringify({ revoked: NOW - 60_000 }) }], NOW), [], "not for a phone whose invitation was taken out");
+
+  // Two times that overlap: each starts once, not one after the other every minute.
+  const overlapping = { ...device, alerts: JSON.stringify([{ ...commute, windows: [{ start: 18 * 60 + 30, end: 20 * 60 }, { start: 19 * 60, end: 20 * 60 + 30 }] }]) };
+  const first = dueStarts([overlapping], NOW)[0];
+  const second = dueStarts([{ ...overlapping, started: JSON.stringify({ [first.occurrence]: first.ends }) }], NOW)[0];
+  assert.notEqual(second.occurrence, first.occurrence);
+  assert.deepEqual(dueStarts([{ ...overlapping, started: JSON.stringify({ [first.occurrence]: first.ends, [second.occurrence]: second.ends }) }], NOW), []);
   assert.deepEqual(dueStarts([device], Date.parse("2026-11-25T19:51:00Z")), [], "nine minutes left");
   assert.deepEqual(dueStarts([{ ...device, alerts: JSON.stringify([{ ...commute, liveActivity: false }]) }], NOW), []);
   assert.deepEqual(dueStarts([device], Date.parse("2026-11-28T19:15:00Z")), [], "not on a Saturday");
@@ -132,9 +141,10 @@ test("a phone registers its Live Activity and gets the next trains back at once"
   const ends = s(NOW) + 3600;
   const reply = await call("PUT", `/v1/activities/${activity}`, mine, { environment: "sandbox", follow, ends });
   assert.equal(reply.status, 200);
-  const { state } = (await reply.json()) as { state: ContentState };
+  const { state, pushes: canPush } = (await reply.json()) as { state: ContentState; pushes: boolean };
   assert.deepEqual(state.trains.map((t) => t.at), [1795634274, 1795634664]);
   assert.equal(state.live, true);
+  assert.equal(canPush, true, "the phone needn't keep it fresh itself");
   const [row] = await rows("SELECT * FROM activities");
   assert.equal(row.ends_at, ends * 1000);
   assert.deepEqual(JSON.parse(row.state), state, "kept, so the next minute pushes only news");
@@ -217,9 +227,32 @@ test("at a saved line's travel time the server starts the Live Activity, once", 
 
   pushes.length = 0;
   assert.deepEqual(await runActivities(env, NOW + 60_000), { followed: 0, sent: 0, started: 0, ended: 0 }, "not again this evening");
-  assert.equal(JSON.parse((await rows("SELECT started FROM devices"))[0].started).commute, String(Date.parse("2026-11-25T19:00:00Z")));
+  assert.deepEqual(JSON.parse((await rows("SELECT started FROM devices"))[0].started), { [`commute@${Date.parse("2026-11-25T19:00:00Z")}`]: Date.parse("2026-11-25T20:00:00Z") });
 
   // A registration without the token (notifications reset) stops the starts.
   await call("PUT", `/v1/devices/${phone}`, mine, { ...registration, startToken: undefined });
   assert.equal(db.rows.get(phone)!.start_token, null);
+});
+
+test("one run at a time, and trouble TfL didn't say this time keeps its notice", async () => {
+  const { env, db, pushes } = await setup();
+  const shown: ContentState = { trains: [{ at: 1795634274, cancelled: false }, { at: 1795634664, cancelled: false }], notice: "Severe delays", updated: s(NOW), live: true };
+  await db.prepare("INSERT INTO activities (token, environment, follow, ends_at, state, updated_at, secret_hash, enrollment_hash) VALUES (?1, 'sandbox', ?2, ?3, ?4, ?5, 'h', 'e')")
+    .bind(activity, JSON.stringify(follow), NOW + 30 * 60_000, JSON.stringify(shown), NOW).run();
+
+  await db.prepare("INSERT INTO meta (key, value, updated_at) VALUES ('live_run', '', ?1)").bind(Date.now()).run();
+  assert.deepEqual(await runActivities(env, NOW), { followed: 0, sent: 0, started: 0, ended: 0 }, "another run has the turn");
+  await db.prepare("UPDATE meta SET updated_at = 0 WHERE key = 'live_run'").run();
+
+  // TfL's status doesn't answer: the trains are the same, and the notice stays, so nothing to push.
+  const fetchWithStatus = globalThis.fetch;
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) =>
+    String(input).includes("/Status") ? new Response("", { status: 503 }) : fetchWithStatus(input, init)) as typeof fetch;
+  assert.deepEqual(await runActivities(env, NOW), { followed: 1, sent: 0, started: 0, ended: 0 });
+  assert.equal(pushes.length, 0);
+
+  // It answers good service: the notice goes.
+  globalThis.fetch = fetchWithStatus;
+  assert.deepEqual(await runActivities(env, NOW), { followed: 1, sent: 1, started: 0, ended: 0 });
+  assert.equal(pushes[0].body.aps["content-state"].notice, undefined);
 });

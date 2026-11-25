@@ -21,10 +21,15 @@ struct RouteAlert: Codable, Hashable, Identifiable, Sendable {
     /// when each time begins (worker/src/activities.ts). Nil, as alerts saved before it are, is off.
     var liveActivity: Bool?
 
-    /// Something the server can start a Live Activity for: a stretch with stations to board at,
-    /// on a line TfL has live times for.
+    /// Something the server can start a Live Activity for at one of its times: the stretch it
+    /// boards first going out (the first), or coming back (the last), has stations, on a line TfL
+    /// has live times for. As worker/src/activities.ts `followFor` picks it.
     var canStartLiveActivity: Bool {
-        segments.contains { $0.from != nil && $0.to != nil && ["tube", "dlr", "elizabeth-line", "overground", "tram"].contains($0.mode) }
+        func follows(_ segment: Segment?) -> Bool {
+            guard let segment else { return false }
+            return segment.from != nil && segment.to != nil && ["tube", "dlr", "elizabeth-line", "overground", "tram"].contains(segment.mode)
+        }
+        return windows.contains { follows(way(of: $0) == .back ? segments.last : segments.first) }
     }
 
     enum Direction: String, Codable, CaseIterable, Sendable {

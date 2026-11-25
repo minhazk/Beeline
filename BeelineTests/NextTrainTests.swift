@@ -75,6 +75,18 @@ struct NextTrainTests {
         alert.segments[0] = RouteAlert.Segment(line: .init(id: "central", name: "Central line"), mode: "tube")
         #expect(!alert.canStartLiveActivity, "a whole line has nowhere to board")
 
+        // The server boards the first stretch going out and the last coming back: a National Rail
+        // leg first only counts at a time going back.
+        let tube = RouteAlert.Segment(line: .init(id: "central", name: "Central line"), mode: "tube",
+                                      from: .init(id: "940GZZLURBG", name: "Redbridge"), to: .init(id: "940GZZLULVT", name: "Liverpool Street"))
+        let rail = RouteAlert.Segment(line: .init(id: "c2c", name: "c2c"), mode: "national-rail",
+                                      from: .init(id: "910GFENCHRS", name: "Fenchurch Street"), to: .init(id: "910GUPMNSTR", name: "Upminster"))
+        var mixed = RouteAlert(segments: [rail, tube])
+        mixed.windows = [RouteAlert.TimeWindow(start: 7 * 60, end: 9 * 60)]
+        #expect(!mixed.canStartLiveActivity)
+        mixed.windows[0].direction = .back
+        #expect(mixed.canStartLiveActivity)
+
         // Sent only when on, so alerts without it go to the server as before.
         alert.liveActivity = true
         let on = try JSONSerialization.jsonObject(with: JSONEncoder().encode(RouteAlert.Wire(alert: alert))) as? NSDictionary
