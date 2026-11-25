@@ -153,7 +153,7 @@ struct OpenInRow: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Check with another app").font(.footnote.weight(.semibold)).foregroundStyle(.secondary)
+            Text("Open in").font(.footnote.weight(.semibold)).foregroundStyle(.secondary)
                 .padding(.horizontal, 4)
             if let reminder = query.time.handoffTimeReminder {
                 Text(reminder).font(.footnote).foregroundStyle(.secondary)
@@ -161,11 +161,11 @@ struct OpenInRow: View {
             HStack(spacing: 8) {
                 ForEach(OpenIn.allCases) { app in
                     Button { app.open(query) } label: {
-                        Text(app.name)
-                            .font(.footnote.weight(.semibold))
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.8)
-                            .frame(maxWidth: .infinity, minHeight: 30)
+                        VStack(spacing: 5) {
+                            Image(systemName: app.symbol).font(.headline)
+                            Text(app.name).font(.caption.weight(.medium))
+                        }
+                        .frame(maxWidth: .infinity, minHeight: 44)
                     }
                     .buttonStyle(.bordered)
                     .tint(Theme.tint)

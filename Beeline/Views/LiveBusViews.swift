@@ -45,7 +45,8 @@ struct BusMarker: View {
             }
         }
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(isYours ? "Your bus" : label.map { "Bus, at your stop in \($0)" } ?? "Bus")
+        .accessibilityLabel(isYours ? "Your bus" : "Bus")
+        .accessibilityValue(label ?? "")
     }
 }
 
@@ -93,8 +94,8 @@ struct LiveBusSummary: View {
                 if let first = approaching.first {
                     Label {
                         VStack(alignment: .leading, spacing: 2) {
-                            Text("Next bus \(Self.when(first, now: store.now))").font(.subheadline.weight(.semibold))
-                            Text(detail(first, later: approaching.dropFirst().prefix(2).map { $0 }))
+                            Text("Next bus \(Self.when(first, now: store.now))").font(.headline).monospacedDigit()
+                            Text(detail(first, later: approaching.dropFirst().prefix(2)))
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
@@ -117,8 +118,8 @@ struct LiveBusSummary: View {
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(12)
-            .surface()
+            .padding(.vertical, 4)
+            .accessibilityElement(children: .combine)
             // The buses glide on the map; words just change.
             .transaction { $0.animation = nil }
         }
@@ -129,7 +130,7 @@ struct LiveBusSummary: View {
         return minutes < 1 ? "due now" : "in \(minutes) min"
     }
 
-    private func detail(_ first: LiveBusStore.Approach, later: [LiveBusStore.Approach]) -> String {
+    private func detail(_ first: LiveBusStore.Approach, later: ArraySlice<LiveBusStore.Approach>) -> String {
         let away = Self.stopsAway(first)
         guard !later.isEmpty else { return away }
         let minutes = later.map { max(0, Int($0.due.timeIntervalSince(store.now) / 60)) }
@@ -154,6 +155,8 @@ struct LineSheet: View {
     @Environment(MapScene.self) private var scene
     @Environment(Router.self) private var router
     @Environment(LiveBusStore.self) private var store
+    @Environment(\.dynamicTypeSize) private var typeSize
+    @ScaledMetric(relativeTo: .body) private var timeWidth = 62
     /// The map has been moved to show the next bus coming.
     @State private var framedBus = false
 
@@ -212,7 +215,6 @@ struct LineSheet: View {
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
         }
-        .padding(.horizontal, 4)
         .padding(.top, 4)
     }
 
@@ -238,53 +240,77 @@ struct LineSheet: View {
         } else {
             VStack(spacing: 0) {
                 ForEach(Array(approaching.prefix(6).enumerated()), id: \.element.id) { index, approach in
-                    if index > 0 { Divider().padding(.leading, 74) }
-                    HStack(spacing: 12) {
-                        Text(LiveBusLayer.label(approach, now: store.now))
-                            .font(.body.weight(.semibold))
-                            .monospacedDigit()
-                            .frame(width: 58, alignment: .leading)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(LiveBusSummary.stopsAway(approach)).font(.subheadline.weight(.medium))
-                            Text("Here at \(approach.due.clock)").font(.caption).foregroundStyle(.secondary)
-                        }
-                        Spacer(minLength: 0)
-                        LiveDot()
+                    if index > 0 { Divider() }
+                    Button {
+                        scene.frame([approach.bus.coordinate, line.stopCoordinate], margin: 400)
+                    } label: {
+                        busRow(approach, first: index == 0)
                     }
-                    .padding(.horizontal, 12)
-                    .frame(minHeight: 56)
-                    .contentShape(.rect)
-                    .onTapGesture { scene.frame([approach.bus.coordinate, line.stopCoordinate], margin: 400) }
-                    .accessibilityElement(children: .combine)
+                    .buttonStyle(.plain)
                     .accessibilityHint("Shows this bus on the map")
                 }
             }
-            .surface()
             .transaction { $0.animation = nil }
-        }
-        Text("Live from TfL. A bus's place is worked out from when it's due at the stops ahead, updated every 30 seconds.")
+            Label {
+                Text("TfL estimates bus positions from stop arrivals every 30 seconds.")
+            } icon: {
+                LiveDot()
+            }
             .font(.caption)
             .foregroundStyle(.secondary)
-            .padding(.horizontal, 4)
+        }
+    }
+
+    private func busRow(_ approach: LiveBusStore.Approach, first: Bool) -> some View {
+        let layout = typeSize.isAccessibilitySize
+            ? AnyLayout(VStackLayout(alignment: .leading, spacing: 2))
+            : AnyLayout(HStackLayout(spacing: 8))
+        return HStack(spacing: 8) {
+            layout {
+                Text(LiveBusLayer.label(approach, now: store.now))
+                    .font(first ? .title3.bold() : .body.weight(.medium))
+                    .monospacedDigit()
+                    .frame(minWidth: timeWidth, alignment: .leading)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(LiveBusSummary.stopsAway(approach)).font(.subheadline)
+                    Text("Here at \(approach.due.clock)").font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            Spacer(minLength: 0)
+            Image(systemName: "map").font(.footnote).foregroundStyle(Theme.tint)
+                .accessibilityHidden(true)
+        }
+        .padding(.vertical, 4)
+        .frame(minHeight: 52)
+        .contentShape(.rect)
     }
 
     private var timetable: some View {
         TimelineView(.periodic(from: .now, by: 30)) { context in
-            VStack(alignment: .leading, spacing: 6) {
-                Text("Leaving").font(.footnote.weight(.semibold)).foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 0) {
+                Text("Departures").font(.headline).padding(.bottom, 4)
                 ForEach(line.departures) { departure in
+                    Divider()
                     HStack {
-                        Text(departure.expected.clock).font(.subheadline.weight(.semibold)).monospacedDigit()
+                        Text(departure.expected.clock).font(.body.weight(.semibold)).monospacedDigit()
+                            .strikethrough(departure.isCancelled)
                         if departure.isRealtime { LiveDot() }
                         Spacer()
-                        let minutes = Int(departure.expected.timeIntervalSince(context.date) / 60)
-                        Text(minutes < 1 ? "Now" : "\(minutes) min").font(.subheadline).monospacedDigit().foregroundStyle(.secondary)
+                        Text(timeLabel(departure, now: context.date))
+                            .font(.subheadline).monospacedDigit().foregroundStyle(.secondary)
                     }
+                    .padding(.vertical, 8)
+                    .accessibilityElement(children: .combine)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(14)
-            .surface()
         }
+    }
+
+    private func timeLabel(_ departure: Departure, now: Date) -> String {
+        if departure.isCancelled { return "Cancelled" }
+        if departure.expected < now { return "Gone" }
+        let minutes = Int(departure.expected.timeIntervalSince(now) / 60)
+        return minutes < 1 ? "Now" : "\(minutes) min"
     }
 }

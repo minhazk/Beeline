@@ -12,7 +12,7 @@ struct HomeSheet: View {
 
     @State private var picking: Picking?
     @State private var showSettings = false
-    @ScaledMetric(relativeTo: .body) private var shortcutSize: CGFloat = 76
+    @ScaledMetric(relativeTo: .body) private var shortcutSize: CGFloat = 60
     @State private var offersSetup = false
     @State private var showSetup = false
     @State private var tookFirstRunTurn = false
@@ -36,15 +36,17 @@ struct HomeSheet: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
+            // Most urgent first: where to, your shortcuts, live status, then history.
+            VStack(alignment: .leading, spacing: 18) {
                 searchRow
                 savedPlaces
                 yourLines
-                if places.recents.isEmpty { exampleJourney } else { recents }
                 nearby
+                if places.recents.isEmpty { exampleJourney } else { recents }
                 if offersSetup {
-                    Button("Set up optional services", systemImage: "gearshape") { showSetup = true }
-                        .font(.subheadline)
+                    Button("Set up extras", systemImage: "key.fill") { showSetup = true }
+                        .font(.subheadline.weight(.medium))
+                        .tint(Theme.tint)
                 }
             }
             .padding(.horizontal, 16)
@@ -128,14 +130,12 @@ struct HomeSheet: View {
         }
         .paneSheet(isPresented: Bindable(alerts).showAlerts, id: "alerts") { AlertsView() }
         .task { await alerts.refreshStatus() }
-        .alert("Can't find where you are", isPresented: .constant(stranded != nil), presenting: stranded) { destination in
+        .alert(location.isDenied ? "Location is off" : "Can't find you", isPresented: .constant(stranded != nil), presenting: stranded) { destination in
             Button("Choose a start") {
                 stranded = nil
                 picking = .origin(for: destination)
             }
             Button("Cancel", role: .cancel) { stranded = nil }
-        } message: { _ in
-            Text(location.isDenied ? "Location is off. Pick where you're starting from instead." : "Pick where you're starting from instead.")
         }
     }
 
@@ -169,7 +169,7 @@ struct HomeSheet: View {
         Button { picking = .destination } label: {
             HStack(spacing: 10) {
                 Image(systemName: "magnifyingglass").fontWeight(.semibold)
-                Text("Search Beeline").foregroundStyle(.secondary)
+                Text("Where to?").foregroundStyle(.secondary)
                 Spacer()
             }
             .font(.body)
@@ -183,28 +183,29 @@ struct HomeSheet: View {
         .accessibilityLabel("Search for a destination")
     }
 
+    /// Home, Work, your places: one row of round shortcuts under the field, no heading needed.
     private var savedPlaces: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Places").font(.title3.bold())
-            ScrollView(.horizontal) {
-                HStack(alignment: .top, spacing: 10) {
-                    savedSlot("Home", icon: "house.fill", place: places.home, set: .home, tint: Theme.tint) { places.home = nil }
-                    savedSlot("Work", icon: "briefcase.fill", place: places.work, set: .work, tint: Color(uiColor: .systemGray)) { places.work = nil }
-                    ForEach(places.favorites) { place in
-                        shortcut(place.name, icon: "mappin", tint: Theme.tint) { go(to: place) }
-                            .contextMenu { Button("Remove place", systemImage: "trash", role: .destructive) { places.removeFavorite(place) } }
-                    }
-                    shortcut("Add", icon: "plus", tint: Theme.tint, subdued: true) { picking = .favorite }
-                        .accessibilityLabel("Add a saved place")
+        ScrollView(.horizontal) {
+            HStack(alignment: .top, spacing: 12) {
+                savedSlot("Home", icon: "house.fill", place: places.home, set: .home, tint: Theme.tint) { places.home = nil }
+                savedSlot("Work", icon: "briefcase.fill", place: places.work, set: .work, tint: Color(uiColor: .systemBrown)) { places.work = nil }
+                shortcut("Alerts", icon: "bell.fill", tint: .orange, subdued: alerts.alerts.isEmpty) { alerts.showAlerts = true }
+                ForEach(places.favorites) { place in
+                    shortcut(place.name, icon: "mappin", tint: Color(uiColor: .systemRed)) { go(to: place) }
+                        .contextMenu { Button("Remove place", systemImage: "trash", role: .destructive) { places.removeFavorite(place) } }
                 }
+                shortcut("Add", icon: "plus", tint: Theme.tint, subdued: true) { picking = .favorite }
+                    .accessibilityLabel("Add a saved place")
             }
-            .scrollIndicators(.hidden)
+            .padding(.vertical, 2)
         }
+        .scrollIndicators(.hidden)
     }
 
+    /// Unset, the circle is pale with "Add" under it: a glance says which ones are ready.
     private func savedSlot(_ title: String, icon: String, place: Place?, set: Picking,
                            tint: Color, clear: @escaping () -> Void) -> some View {
-        shortcut(title, icon: icon, tint: tint, subtitle: place?.name) {
+        shortcut(title, icon: icon, tint: tint, subtitle: place == nil ? "Add" : nil, subdued: place == nil) {
             if let place { go(to: place) } else { picking = set }
         }
         .accessibilityHint(place.map { "Find a route to " + $0.name } ?? "Choose where to set " + title)
@@ -219,18 +220,18 @@ struct HomeSheet: View {
     private func shortcut(_ title: String, icon: String, tint: Color, subtitle: String? = nil, subdued: Bool = false,
                           action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            VStack(spacing: 6) {
+            VStack(spacing: 5) {
                 Image(systemName: icon)
-                    .font(.system(size: shortcutSize * 0.43, weight: .semibold))
+                    .font(.system(size: shortcutSize * 0.4, weight: .semibold))
                     .foregroundStyle(subdued ? tint : .white)
                     .frame(width: shortcutSize, height: shortcutSize)
-                    .background((subdued ? tint.opacity(0.20) : tint).gradient, in: .circle)
-                VStack(spacing: 1) {
-                    Text(title).font(.subheadline.weight(.medium)).lineLimit(2)
-                    if let subtitle { Text(subtitle).font(.caption).foregroundStyle(.secondary).lineLimit(1) }
+                    .background((subdued ? tint.opacity(0.18) : tint).gradient, in: .circle)
+                VStack(spacing: 0) {
+                    Text(title).font(.footnote.weight(.semibold)).lineLimit(1)
+                    if let subtitle { Text(subtitle).font(.caption2).foregroundStyle(.secondary).lineLimit(1) }
                 }
             }
-            .frame(width: shortcutSize + 4)
+            .frame(width: shortcutSize + 12)
             .contentShape(.rect)
         }
         .buttonStyle(.plain)
@@ -238,29 +239,28 @@ struct HomeSheet: View {
 
     private var exampleJourney: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Try a journey").font(.title3.bold())
+            SectionHeader("Try it")
             Button {
                 router.path.append(.results(.londonExample))
             } label: {
                 HStack(spacing: 12) {
-                    Image(systemName: "tram.fill").foregroundStyle(Theme.tint)
-                        .frame(width: 34, height: 34).background(Theme.tint.opacity(0.15), in: .circle)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("King’s Cross → Canary Wharf").font(.subheadline.weight(.semibold))
-                        Text("London example").font(.caption).foregroundStyle(.secondary)
-                    }
-                    Spacer()
-                    Image(systemName: "chevron.right").font(.caption.bold()).foregroundStyle(.secondary)
+                    Image(systemName: "tram.fill").foregroundStyle(.white)
+                        .frame(width: 34, height: 34).background(Theme.tint.gradient, in: .circle)
+                    Text("King’s Cross → Canary Wharf").font(.subheadline.weight(.semibold)).lineLimit(1)
+                    Spacer(minLength: 8)
+                    Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(.tertiary)
                 }
-                .padding(12)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(.fill.tertiary, in: .rect(cornerRadius: 17))
+                .padding(.horizontal, 12)
+                .frame(minHeight: 56)
+                .contentShape(.rect)
             }
             .buttonStyle(.plain)
+            .accessibilityHint("A London example journey")
+            .surface()
         }
     }
 
-    /// The lines you've asked to hear about, with what TfL says about them now.
+    /// The lines you've asked to hear about: pills on the left, TfL's verdict as one coloured word on the right.
     @ViewBuilder private var yourLines: some View {
         if !alerts.alerts.isEmpty {
             VStack(alignment: .leading, spacing: 8) {
@@ -271,16 +271,26 @@ struct HomeSheet: View {
                     ForEach(Array(alerts.alerts.enumerated()), id: \.element.id) { index, alert in
                         if index > 0 { Divider().padding(.leading, 12) }
                         Button { alerts.showAlerts = true } label: {
-                            HStack {
-                                AlertRow(alert: alert, status: alerts.status[alert.id], pending: alerts.delivery.pending[alert.id], compact: true)
+                            HStack(spacing: 10) {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    HStack(spacing: 4) {
+                                        ForEach(alert.segments) { segment in
+                                            LinePill(mode: segment.legMode, line: segment.line.name, color: segment.color, compact: true)
+                                        }
+                                    }
+                                    Text(alert.displayName).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                                }
                                 Spacer(minLength: 8)
+                                LineStatusBadge(status: alerts.status[alert.id], pending: alerts.delivery.pending[alert.id] != nil,
+                                                configured: alerts.isConfigured)
                                 Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(.tertiary)
                             }
                             .padding(.horizontal, 12)
-                            .padding(.vertical, 10)
+                            .frame(minHeight: 56)
                             .contentShape(.rect)
                         }
                         .buttonStyle(.plain)
+                        .accessibilityElement(children: .combine)
                     }
                 }
                 .surface(highlighted: alerts.alerts.contains { alerts.status[$0.id]?.issues.contains { $0.level == .closed } == true })
@@ -291,13 +301,14 @@ struct HomeSheet: View {
     @ViewBuilder private var recents: some View {
         if !places.recents.isEmpty {
             VStack(alignment: .leading, spacing: 8) {
-                Text("Recents").font(.title3.bold())
+                SectionHeader("Recents")
                 VStack(spacing: 0) {
                     ForEach(Array(places.recents.prefix(5).enumerated()), id: \.element.id) { index, place in
                         if index > 0 { Divider().padding(.leading, 52) }
                         Button { go(to: place) } label: {
                             HStack(spacing: 12) {
                                 Image(systemName: "clock.arrow.circlepath")
+                                    .font(.subheadline.weight(.semibold))
                                     .foregroundStyle(.secondary)
                                     .frame(width: 28)
                                 VStack(alignment: .leading, spacing: 1) {
@@ -310,7 +321,7 @@ struct HomeSheet: View {
                                 Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(.tertiary)
                             }
                             .padding(.horizontal, 12)
-                            .frame(minHeight: 54)
+                            .frame(minHeight: 52)
                             .contentShape(.rect)
                         }
                         .buttonStyle(.plain)
@@ -321,14 +332,14 @@ struct HomeSheet: View {
                         }
                     }
                 }
-                .background(.fill.tertiary, in: .rect(cornerRadius: 17))
+                .surface()
             }
         }
     }
 
     private var nearby: some View {
         VStack(alignment: .leading, spacing: 8) {
-            SectionHeader("Leaving near you") {
+            SectionHeader("Nearby") {
                 if departures.nearby?.value != nil {
                     Button("Refresh", systemImage: "arrow.clockwise") { Task { await refreshNearby(force: true) } }
                         .labelStyle(.iconOnly)
@@ -371,6 +382,7 @@ struct HomeSheet: View {
 struct NearbyList: View {
     var state: Loadable<[NearbyLine]>?
     var locationOff: Bool
+    @Environment(\.openURL) private var openURL
     /// Rows shown before "Show more"; the rest of the one request's lines are behind it.
     var collapsedCount = 3
     @State private var showAll = false
@@ -378,17 +390,24 @@ struct NearbyList: View {
     var body: some View {
         Group {
             if locationOff {
-                note("Turn on location to see what's leaving near you.")
+                Button {
+                    openURL(URL(string: UIApplication.openSettingsURLString)!)
+                } label: {
+                    Label("Enable location", systemImage: "location.slash")
+                        .frame(maxWidth: .infinity, minHeight: 48)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(Theme.tint)
             } else {
                 switch state {
                 case .loaded(let lines) where lines.isEmpty:
-                    note("Nothing is leaving from stops within 400 m right now.")
+                    note("Nothing leaving within 400 m", icon: "moon.zzz.fill")
                 case .loaded(let lines):
                     TimelineView(.periodic(from: .now, by: 15)) { context in
                         let all = Array(lines.compactMap { $0.upcoming(at: context.date) }.prefix(10))
                         let shown = showAll ? all : Array(all.prefix(collapsedCount))
                         VStack(spacing: 0) {
-                            if all.isEmpty { note("No upcoming departures in the latest board.") }
+                            if all.isEmpty { note("No departures right now", icon: "moon.zzz.fill") }
                             ForEach(Array(shown.enumerated()), id: \.element.id) { index, line in
                                 if index > 0 { Divider().padding(.leading, 12) }
                                 NavigationLink(value: Page.line(line)) {
@@ -398,7 +417,7 @@ struct NearbyList: View {
                             }
                             if all.count > collapsedCount {
                                 Divider().padding(.leading, 12)
-                                Button(showAll ? "Show fewer" : "Show \(all.count - collapsedCount) more") {
+                                Button(showAll ? "Fewer" : "\(all.count - collapsedCount) more") {
                                     withAnimation(.snappy) { showAll.toggle() }
                                 }
                                 .font(.subheadline.weight(.medium))
@@ -408,28 +427,28 @@ struct NearbyList: View {
                         }
                     }
                 case .failed(let reason):
-                    note(reason)
+                    note(reason, icon: "exclamationmark.triangle.fill")
                 case .loading, nil:
-                    HStack(spacing: 10) {
-                        ProgressView()
-                        Text("Finding departures near you…").font(.subheadline).foregroundStyle(.secondary)
-                    }
-                    .frame(maxWidth: .infinity, minHeight: 60)
+                    ProgressView()
+                        .frame(maxWidth: .infinity, minHeight: 56)
+                        .accessibilityLabel("Finding departures near you")
                 }
             }
         }
         .surface()
     }
 
-    private func note(_ text: String) -> some View {
-        Text(text)
-            .font(.subheadline)
+    private func note(_ text: String, icon: String) -> some View {
+        Label(text, systemImage: icon)
+            .font(.subheadline.weight(.medium))
             .foregroundStyle(.secondary)
+            .lineLimit(2)
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(14)
     }
 }
 
+/// One line at a glance: its pill, where it's heading, and the next one in big digits.
 private struct NearbyRow: View {
     var line: NearbyLine
     var now: Date
@@ -441,27 +460,21 @@ private struct NearbyRow: View {
                 .fixedSize(horizontal: router.isNarrow, vertical: false)
                 .frame(minWidth: 44, alignment: .leading)
             VStack(alignment: .leading, spacing: 2) {
-                Text(line.headsign.isEmpty ? line.line : "to \(line.headsign)")
-                    .font(.subheadline.weight(.medium))
+                Text(line.headsign.isEmpty ? line.line : line.headsign)
+                    .font(.subheadline.weight(.semibold))
                     .lineLimit(1)
-                Text("\(line.stopName) · \(Int((line.distance / 10).rounded()) * 10) m")
+                Text("\(Int((line.distance / 10).rounded()) * 10) m · \(line.stopName)")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
             Spacer(minLength: 8)
-            HStack(alignment: .firstTextBaseline, spacing: 4) {
-                if line.departures.contains(where: \.isRealtime) { LiveDot() }
-                Text(times)
-                    .font(.subheadline.weight(.semibold))
-                    .monospacedDigit()
-                    .lineLimit(1)
-                    // On a narrow window the line and the times stay whole and the names give way.
-                    .fixedSize(horizontal: router.isNarrow, vertical: false)
-                Image(systemName: "chevron.right")
-                    .font(.caption2.weight(.semibold))
-                    .foregroundStyle(.tertiary)
-            }
+            times
+                // On a narrow window the line and the times stay whole and the names give way.
+                .fixedSize()
+            Image(systemName: "chevron.right")
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(.tertiary)
         }
         .padding(.horizontal, 12)
         .frame(minHeight: 56)
@@ -470,11 +483,68 @@ private struct NearbyRow: View {
         .accessibilityHint(line.mode == .bus ? "Shows where the buses are" : "Shows the next departures")
     }
 
-    /// "Now, 6, 12 min".
-    private var times: String {
-        let minutes = line.departures.prefix(router.isNarrow ? 2 : .max).map { max(0, Int($0.expected.timeIntervalSince(now) / 60)) }
-        guard !minutes.isEmpty else { return "" }
-        let parts = minutes.map { $0 == 0 ? "Now" : "\($0)" }
-        return parts.joined(separator: ", ") + (minutes.last == 0 ? "" : " min")
+    private var minutes: [Int] {
+        line.departures.prefix(router.isNarrow ? 2 : 3).map { max(0, Int($0.expected.timeIntervalSince(now) / 60)) }
+    }
+
+    /// "6 min" large, "then 12, 19" small under it.
+    @ViewBuilder private var times: some View {
+        if let first = minutes.first {
+            VStack(alignment: .trailing, spacing: 0) {
+                HStack(alignment: .firstTextBaseline, spacing: 3) {
+                    if line.departures.contains(where: \.isRealtime) { LiveDot() }
+                    Text(first == 0 ? "Now" : "\(first)")
+                        .font(.title3.weight(.bold))
+                        .monospacedDigit()
+                        .foregroundStyle(first == 0 ? Theme.live : Theme.ink)
+                    if first > 0 { Text("min").font(.caption.weight(.semibold)).foregroundStyle(.secondary) }
+                }
+                if minutes.count > 1 {
+                    Text("then " + minutes.dropFirst().map(String.init).joined(separator: ", "))
+                        .font(.caption)
+                        .monospacedDigit()
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+    }
+}
+
+/// TfL's verdict on one of your lines as a single coloured word.
+private struct LineStatusBadge: View {
+    var status: AlertStatus.Entry?
+    var pending: Bool
+    var configured: Bool
+
+    var body: some View {
+        let look = self.look
+        HStack(spacing: 6) {
+            if status?.upcoming.isEmpty == false {
+                Image(systemName: "calendar")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .accessibilityLabel("Planned works")
+            }
+            Label(look.word, systemImage: look.icon)
+                .font(.caption.weight(.bold))
+                .foregroundStyle(look.color)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(look.color.opacity(0.15), in: .capsule)
+        }
+        .fixedSize()
+    }
+
+    private var look: (word: String, icon: String, color: Color) {
+        if pending { return ("Not synced", "exclamationmark.circle.fill", Theme.warning) }
+        guard let status else {
+            return configured ? ("Checking", "ellipsis", .secondary) : ("Off", "bell.slash.fill", .secondary)
+        }
+        switch status.issues.map(\.level).max() {
+        case .closed?: return ("Closed", "xmark.octagon.fill", Color(uiColor: .systemRed))
+        case .delays?: return ("Delays", "exclamationmark.triangle.fill", Theme.warning)
+        case .minor?: return ("Minor", "info.circle.fill", .secondary)
+        case nil: return ("Good", "checkmark.circle.fill", Theme.live)
+        }
     }
 }

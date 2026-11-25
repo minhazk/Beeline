@@ -9,19 +9,19 @@ struct AlertEditor: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.paneClose) private var paneClose
     @State private var addingLine = false
-    @State private var customDays = false
+    @State private var showsOptions = false
     /// The alert as it opened, to tell whether it has been edited.
     @State private var original: RouteAlert?
 
+    /// The usual sets of days, one tap each; any other set is tapped out on the days themselves.
     enum Days: String, CaseIterable, Identifiable {
-        case weekdays = "Weekdays", everyDay = "Every day", weekends = "Weekends", custom = "Custom"
+        case weekdays = "Weekdays", everyDay = "Every day", weekends = "Weekends"
         var id: Self { self }
-        var days: [Int]? {
+        var days: [Int] {
             switch self {
             case .weekdays: Array(1...5)
             case .everyDay: Array(1...7)
             case .weekends: [6, 7]
-            case .custom: nil
             }
         }
     }
@@ -31,45 +31,79 @@ struct AlertEditor: View {
         Form {
             if !isNew, let status = store.status[alert.id] { now(status) }
 
+            // In the order you'd say it: which line, which days, what times, how much to hear.
             Section {
-                ForEach(alert.segments) { segment in
-                    HStack(spacing: 10) {
-                        LinePill(mode: segment.legMode, line: segment.line.name, color: segment.color, compact: true)
-                        Text(segment.stretch).lineLimit(2)
+                if alert.segments.isEmpty {
+                    Button {
+                        addingLine = true
+                    } label: {
+                        Label("Choose a line", systemImage: "plus.circle.fill").font(.headline)
                     }
-                }
-                .onDelete { alert.segments.remove(atOffsets: $0) }
-                Button("Add a line", systemImage: "plus") { addingLine = true }
-                    .disabled(alert.segments.count >= RouteAlert.maxSegments)
-            } header: {
-                Text("Lines")
-            } footer: {
-                Text("Choose two stations to set a direction, or watch the whole line.")
-            }
-
-            Section {
-                if alert.ends != nil {
-                    Picker("Default direction", selection: $alert.way) {
-                        ForEach([RouteAlert.Direction.both, .out, .back], id: \.self) { Text(alert.label($0)).tag($0) }
+                } else {
+                    ForEach(alert.segments) { segment in
+                        HStack(spacing: 10) {
+                            LinePill(mode: segment.legMode, line: segment.line.name, color: segment.color, compact: true)
+                            Text(segment.stretch).lineLimit(2)
+                        }
                     }
-                }
-                Picker("Days", selection: daysChoice) {
-                    ForEach(Days.allCases) { Text($0.rawValue).tag($0) }
-                }
-                if daysChoice.wrappedValue == .custom {
-                    ForEach([1, 2, 3, 4, 5, 6, 7], id: \.self) { day in
-                        Button {
-                            if alert.days.contains(day) { alert.days.removeAll { $0 == day } } else { alert.days.append(day) }
-                            alert.days.sort()
-                        } label: {
-                            HStack {
-                                Text(Calendar.current.weekdaySymbols[day % 7]).foregroundStyle(.primary)
-                                Spacer()
-                                if alert.days.contains(day) { Image(systemName: "checkmark").foregroundStyle(Theme.tint) }
-                            }
+                    .onDelete { alert.segments.remove(atOffsets: $0) }
+                    Button("Add another line", systemImage: "plus") { addingLine = true }
+                        .disabled(alert.segments.count >= RouteAlert.maxSegments)
+                    if alert.ends != nil {
+                        Picker("Direction", selection: $alert.way) {
+                            ForEach([RouteAlert.Direction.both, .out, .back], id: \.self) { Text(alert.label($0)).tag($0) }
                         }
                     }
                 }
+            } header: {
+                Text("Route")
+            }
+
+            Section {
+                HStack(spacing: 6) {
+                    ForEach([1, 2, 3, 4, 5, 6, 7], id: \.self) { day in
+                        let on = alert.days.contains(day)
+                        Button {
+                            if on { alert.days.removeAll { $0 == day } } else { alert.days.append(day) }
+                            alert.days.sort()
+                        } label: {
+                            Text(Calendar.current.veryShortWeekdaySymbols[day % 7])
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(on ? Color.white : Theme.ink)
+                                .frame(maxWidth: .infinity, minHeight: 40)
+                                .background(on ? Theme.tint : Color(uiColor: .tertiarySystemFill), in: .rect(cornerRadius: 10))
+                                .contentShape(.rect)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel(Calendar.current.weekdaySymbols[day % 7])
+                        .accessibilityAddTraits(on ? .isSelected : [])
+                    }
+                }
+                FlowLayout(spacing: 8) {
+                    ForEach(Days.allCases) { choice in
+                        let on = Set(alert.days) == Set(choice.days)
+                        Button {
+                            alert.days = choice.days
+                        } label: {
+                            Text(choice.rawValue)
+                                .font(.footnote.weight(.semibold))
+                                .foregroundStyle(on ? Theme.tint : Color.secondary)
+                                .padding(.horizontal, 12)
+                                .frame(minHeight: 32)
+                                .background(on ? Theme.tint.opacity(0.15) : Color(uiColor: .tertiarySystemFill), in: .capsule)
+                                .contentShape(.capsule)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityAddTraits(on ? .isSelected : [])
+                    }
+                }
+            } header: {
+                Text("Days")
+            } footer: {
+                if alert.days.isEmpty { Text("Choose at least one day.").foregroundStyle(Theme.warning) }
+            }
+
+            Section {
                 // By position, so editing a time doesn't remake its row mid-edit.
                 ForEach(alert.windows.indices, id: \.self) { index in
                     let from = DatePicker("From", selection: minutes(slot(index, \.start)), displayedComponents: .hourAndMinute).labelsHidden()
@@ -114,27 +148,25 @@ struct AlertEditor: View {
                 }
                 .disabled(alert.windows.count >= RouteAlert.maxWindows)
             } header: {
-                Text("When you travel")
+                Text("Times")
             } footer: {
-                if alert.ends != nil {
-                    Text("Choose a direction for each travel time.")
+                if alert.windows.isEmpty {
+                    Text("Add a time you travel.").foregroundStyle(Theme.warning)
                 }
             }
 
             Section {
-                Toggle("Minor delays too", isOn: $alert.minorDelays)
-            } footer: {
-                Text("Live alerts during travel times. Planned works at 7 pm the evening before.")
-            }
-
-            Section {
-                TextField(alert.defaultName, text: $alert.name)
-            } header: {
-                Text("Name")
-            } footer: {
-                if let saveProblem, !isNew || !alert.segments.isEmpty || !alert.name.isEmpty {
-                    Text(saveProblem).foregroundStyle(Theme.warning)
+                DisclosureGroup("More options", isExpanded: $showsOptions) {
+                    TextField("Alert name", text: $alert.name, prompt: Text(alert.defaultName))
+                    Toggle("Include minor delays", isOn: $alert.minorDelays)
+                    LabeledContent("Planned works", value: "7 pm the day before")
+                        .font(.footnote).foregroundStyle(.secondary)
                 }
+            }
+            if let saveProblem, !isNew || !alert.segments.isEmpty || !alert.name.isEmpty {
+                Label(saveProblem, systemImage: "exclamationmark.triangle.fill").foregroundStyle(Theme.warning)
+            } else if !alert.segments.isEmpty, !store.isConfigured {
+                Label("Saved locally · Push alerts off", systemImage: "bell.slash").foregroundStyle(.secondary)
             }
 
             if !isNew {
@@ -217,16 +249,6 @@ struct AlertEditor: View {
         }
     }
 
-    private var daysChoice: Binding<Days> {
-        Binding {
-            if customDays { return .custom }
-            return Days.allCases.first { $0.days.map(Set.init) == Set(alert.days) } ?? .custom
-        } set: { choice in
-            customDays = choice == .custom
-            if let days = choice.days { alert.days = days }
-        }
-    }
-
     /// A time's start or end, safe while a deleted row is still on screen.
     private func slot(_ index: Int, _ field: WritableKeyPath<RouteAlert.TimeWindow, Int>) -> Binding<Int> {
         Binding {
@@ -249,6 +271,7 @@ struct AlertEditor: View {
 
 /// Choose a line, then where you get on and off.
 struct LinePicker: View {
+    var dismissesAfterPick = true
     var onPick: (RouteAlert.Segment) -> Void
 
     @Environment(\.dismiss) private var dismiss
@@ -275,7 +298,7 @@ struct LinePicker: View {
                                     NavigationLink {
                                         StationPicker(line: line, from: nil) { segment in
                                             onPick(segment)
-                                            dismiss(or: paneClose)
+                                            if dismissesAfterPick { dismiss(or: paneClose) }
                                         }
                                     } label: {
                                         HStack(spacing: 10) {
@@ -328,10 +351,8 @@ struct StationPicker: View {
                         Button {
                             onPick(route.segment(line, from: nil, to: nil))
                         } label: {
-                            Label("The whole line", systemImage: "point.topleft.down.to.point.bottomright.curvepath")
+                            Label("Whole line", systemImage: "point.topleft.down.to.point.bottomright.curvepath")
                         }
-                    } footer: {
-                        Text("Or choose where you get on.")
                     }
                 }
                 Section {
@@ -353,7 +374,8 @@ struct StationPicker: View {
         .searchable(text: $search, prompt: "Station")
         // Pushed inside the line picker.
         .keepsSheetWhenUnfolded(true)
-        .navigationTitle(from.map { "From \($0.name) to" } ?? "Get on at")
+        .navigationTitle(from == nil ? "Board at" : "Get off at")
+        .navigationSubtitle(from.map { "\(line.name) · From \($0.name)" } ?? line.name)
         .navigationBarTitleDisplayMode(.inline)
         .task { await load() }
     }

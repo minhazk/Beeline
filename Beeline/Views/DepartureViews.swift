@@ -36,6 +36,7 @@ struct DepartureStrip: View {
                 ticks(board, now: now, before: 1, after: 3)
                 ticks(board, now: now, before: 1, after: 2)
                 ticks(board, now: now, before: 0, after: 1)
+                ticks(board, now: now, before: 0, after: 0)
             }
             if let line = verdict(board, now: now) {
                 Text(line.text)
@@ -83,19 +84,19 @@ struct DepartureStrip: View {
         let there = leg.toName.isEmpty ? "there" : leg.toName
         if planned.isCancelled {
             if let next = board.nextAfterPlanned {
-                return ("Your \(planned.scheduled.clock) is cancelled. The next is \(next.expected.clock).", true)
+                return ("\(planned.scheduled.clock) cancelled · next \(next.expected.clock)", true)
             }
-            return ("Your \(planned.scheduled.clock) is cancelled.", true)
+            return ("\(planned.scheduled.clock) cancelled", true)
         }
         var parts: [String] = []
-        if planned.isLate { parts.append("Running \(Int(planned.delay / 60)) min late.") }
+        if planned.isLate { parts.append("\(Int(planned.delay / 60)) min late") }
         if let earlier = board.earlierThanPlanned(after: max(now, reachable ?? now)), let gain = board.arrivalDifference(earlier), gain < -30 {
-            parts.append("Make the \(earlier.expected.clock) and you reach \(there) \(Int((-gain / 60).rounded())) min sooner.")
+            parts.append("Earlier \(earlier.expected.clock) · \(Int((-gain / 60).rounded())) min sooner at \(there)")
         }
         if let next = board.nextAfterPlanned, let cost = board.arrivalDifference(next) {
-            parts.append("Miss it and the \(next.expected.clock) gets you there \(Int((cost / 60).rounded())) min later.")
+            parts.append("If missed, \(next.expected.clock) · \(cost.signedMinutesText) at \(there)")
         }
-        return parts.isEmpty ? nil : (parts.joined(separator: " "), planned.isLate)
+        return parts.isEmpty ? nil : (parts.joined(separator: "\n"), planned.isLate)
     }
 }
 
@@ -105,7 +106,6 @@ private struct Tick: View {
     var isPlanned: Bool
     var isGone: Bool
     @ScaledMetric(relativeTo: .footnote) private var width = 44
-    @ScaledMetric(relativeTo: .footnote) private var height = 40
 
     var body: some View {
         VStack(spacing: 1) {
@@ -118,13 +118,14 @@ private struct Tick: View {
                 .font(.caption2.weight(isPlanned ? .semibold : .regular))
                 .foregroundStyle(isPlanned ? Theme.tint : .secondary)
         }
-        .frame(width: width, height: height)
-        .background(isPlanned ? Theme.tint.opacity(0.12) : Color(uiColor: .quaternarySystemFill), in: .rect(cornerRadius: 9))
-        .overlay {
-            if isPlanned { RoundedRectangle(cornerRadius: 9).strokeBorder(Theme.tint, lineWidth: 1) }
+        .frame(minWidth: width, minHeight: 40)
+        .padding(.bottom, 3)
+        .overlay(alignment: .bottom) {
+            Rectangle().fill(isPlanned ? Theme.tint : Theme.hairline).frame(height: isPlanned ? 2 : 1)
         }
-        .opacity(isGone && !isPlanned ? 0.5 : 1)
+        .opacity(isGone && !isPlanned ? 0.7 : 1)
         .accessibilityElement(children: .combine)
+        .accessibilityValue(isPlanned && caption != "yours" ? "Your planned departure" : "")
     }
 }
 
@@ -154,7 +155,7 @@ struct BoardSheet: View {
                                 if let id = board.plannedID { reader.scrollTo(id, anchor: .center) }
                             }
                         }
-                        Text("Times from Transitous (open timetables), live where marked. Each row shows when it reaches \(leg.toName).")
+                        Text("Transitous timetable · live times where marked")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                             .padding(.horizontal, 4)
@@ -183,7 +184,7 @@ struct BoardSheet: View {
                 .font(Theme.title(.title2))
             HStack(spacing: 6) {
                 LinePill(leg: leg, compact: true)
-                Text("and anything else stopping at \(leg.toName)")
+                Text("Services calling at \(leg.toName)")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
             }
@@ -195,14 +196,13 @@ struct BoardSheet: View {
     private func rows(_ board: DepartureBoard, now: Date) -> some View {
         VStack(spacing: 0) {
             ForEach(Array(board.departures.enumerated()), id: \.element.id) { index, departure in
-                if index > 0 { Divider().padding(.leading, 74) }
+                if index > 0 { Divider() }
                 BoardRow(departure: departure, isPlanned: departure.id == board.plannedID, now: now,
                          difference: departure.id == board.plannedID ? nil : board.arrivalDifference(departure),
                          destination: leg.toName)
                     .id(departure.id)
             }
         }
-        .surface()
     }
 
     private func note(_ text: String) -> some View {
@@ -210,8 +210,7 @@ struct BoardSheet: View {
             .font(.subheadline)
             .foregroundStyle(.secondary)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(14)
-            .surface()
+            .padding(.vertical, 8)
     }
 }
 
@@ -249,6 +248,8 @@ private struct BoardRow: View {
     var destination: String
     @Environment(Router.self) private var router
     @Environment(\.boardIsNarrow) private var boardIsNarrow
+    @Environment(\.dynamicTypeSize) private var typeSize
+    @ScaledMetric(relativeTo: .body) private var clockWidth = 54
 
     /// Under 400 pt for its row: the window is narrow, or the board is in a panel.
     private var isNarrow: Bool { router.isNarrow || boardIsNarrow }
@@ -256,7 +257,10 @@ private struct BoardRow: View {
     private var isGone: Bool { departure.expected < now }
 
     var body: some View {
-        HStack(alignment: .center, spacing: 12) {
+        let layout = typeSize.isAccessibilitySize
+            ? AnyLayout(VStackLayout(alignment: .leading, spacing: 4))
+            : AnyLayout(HStackLayout(spacing: 8))
+        layout {
             VStack(alignment: .leading, spacing: 1) {
                 Text(departure.expected.clock)
                     .font(.body.weight(.semibold))
@@ -267,7 +271,7 @@ private struct BoardRow: View {
                     Text(departure.scheduled.clock).font(.caption).monospacedDigit().strikethrough().foregroundStyle(.secondary)
                 }
             }
-            .frame(width: 50, alignment: .leading)
+            .frame(minWidth: clockWidth, alignment: .leading)
             VStack(alignment: .leading, spacing: 3) {
                 if isNarrow {
                     // Narrow, the line's name and the headsign stay whole: side by side when they
@@ -288,13 +292,14 @@ private struct BoardRow: View {
                         headsign.lineLimit(1)
                     }
                 }
-                Text(detail)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
+                if !detail.isEmpty {
+                    Text(detail)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             }
-            Spacer(minLength: 6)
-            VStack(alignment: .trailing, spacing: 2) {
+            if !typeSize.isAccessibilitySize { Spacer(minLength: 0) }
+            VStack(alignment: typeSize.isAccessibilitySize ? .leading : .trailing, spacing: 2) {
                 HStack(spacing: 3) {
                     if departure.isRealtime { LiveDot() }
                     Text(status)
@@ -309,17 +314,16 @@ private struct BoardRow: View {
                 }
             }
         }
-        .padding(.horizontal, 12)
+        .padding(.leading, 8)
+        .padding(.vertical, 6)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .frame(minHeight: 60)
-        .background {
+        .overlay(alignment: .leading) {
             if isPlanned {
-                RoundedRectangle(cornerRadius: 12)
-                    .fill(Theme.tint.opacity(0.08))
-                    .strokeBorder(Theme.tint.opacity(0.7), lineWidth: 1)
-                    .padding(3)
+                Capsule().fill(Theme.tint).frame(width: 2).padding(.vertical, 8)
             }
         }
-        .opacity(isGone && !isPlanned ? 0.5 : 1)
+        .opacity(isGone && !isPlanned ? 0.7 : 1)
         .accessibilityElement(children: .combine)
     }
 
@@ -335,8 +339,10 @@ private struct BoardRow: View {
     private var detail: String {
         var parts: [String] = []
         // The page's heading names the stop already; a narrow window has no room to repeat it.
+        if let platform = departure.platform {
+            parts.append([LegMode.bus, .coach].contains(departure.mode) ? "Stop \(platform)" : "Platform \(platform)")
+        }
         if let there = departure.arrivalThere { parts.append(isNarrow ? "Arrives \(there.clock)" : "\(destination) \(there.clock)") }
-        if let platform = departure.platform { parts.append("platform \(platform)") }
         return parts.joined(separator: " · ")
     }
 

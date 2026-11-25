@@ -44,22 +44,7 @@ struct PlaceSearchView: View {
                 if let venues {
                     venueSection(venues)
                 } else if search.text.isEmpty {
-                    if allowsCurrentLocation {
-                        row(icon: "location.fill", tint: Theme.tint, title: "Current Location", subtitle: nil) {
-                            // A fresh fix: the last one the app heard may be where the trip started.
-                            Task {
-                                resolving = true
-                                let here = try? await location.current()
-                                resolving = false
-                                pick(.currentLocation(here ?? location.last ?? .init(latitude: 0, longitude: 0)))
-                            }
-                        }
-                    }
-                    if let home = places.home { row(icon: "house.fill", tint: Theme.tint, title: "Home", subtitle: home.name) { pick(home) } }
-                    if let work = places.work { row(icon: "briefcase.fill", tint: Theme.tint, title: "Work", subtitle: work.name) { pick(work) } }
-                    ForEach(places.favorites) { place in
-                        row(icon: "mappin", tint: Theme.tint, title: place.name, subtitle: place.subtitle) { pick(place) }
-                    }
+                    if hasShortcuts { shortcuts }
                     if !places.recents.isEmpty {
                         Section("Recent") {
                             ForEach(places.recents) { place in
@@ -112,25 +97,25 @@ struct PlaceSearchView: View {
                     Button { pick(PlaceSearch.place(venue.item)) } label: {
                         HStack(spacing: 12) {
                             Image(systemName: Self.symbol(venue.item.pointOfInterestCategory))
-                                .foregroundStyle(Theme.tint)
-                                .frame(width: 26)
-                            VStack(alignment: .leading, spacing: 3) {
-                                Text(venue.item.name ?? "Unnamed place").foregroundStyle(.primary).lineLimit(1)
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(.white)
+                                .frame(width: 32, height: 32)
+                                .background(Theme.tint.gradient, in: .circle)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(venue.item.name ?? "Unnamed place").font(.body.weight(.medium)).foregroundStyle(.primary).lineLimit(1)
                                 // Distance first: long addresses get cut off.
                                 let address = [venue.distance.map(LiveTrip.distanceText),
                                                venue.item.address?.shortAddress ?? venue.item.addressRepresentations?.cityWithContext].compactMap { $0 }
                                 if !address.isEmpty {
                                     Text(address.joined(separator: " · ")).font(.caption).foregroundStyle(.secondary).lineLimit(1)
                                 }
-                                if let time = venue.travelTime {
-                                    Text("\(Image(systemName: "tram.fill")) \(time.minutesText) by public transport")
-                                        .font(.caption.weight(.medium))
-                                        .foregroundStyle(Theme.ink)
-                                } else if list.timing {
-                                    Text("Working out how long…").font(.caption).foregroundStyle(.tertiary)
-                                }
                             }
-                            Spacer(minLength: 0)
+                            Spacer(minLength: 8)
+                            if let time = venue.travelTime {
+                                travelBadge(time)
+                            } else if list.timing {
+                                ProgressView().controlSize(.small).accessibilityLabel("Working out how long")
+                            }
                         }
                         .contentShape(.rect)
                     }
@@ -145,10 +130,22 @@ struct PlaceSearchView: View {
             }
         } header: {
             Text("\(list.venues.count) for “\(list.query)”")
-        } footer: {
-            let times = showsTravelTimes ? "Times are Apple's public transport estimates from where you are. " : ""
-            Text("\(times)Tap \(Image(systemName: "info.circle")) for opening hours, photos and reviews.")
         }
+    }
+
+    /// Apple's public transport estimate as one bold number.
+    private func travelBadge(_ time: TimeInterval) -> some View {
+        HStack(spacing: 3) {
+            Image(systemName: "tram.fill").font(.caption2)
+            Text(time.minutesText).font(.subheadline.weight(.bold)).monospacedDigit()
+        }
+        .foregroundStyle(Theme.ink)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .background(Theme.ink.opacity(0.07), in: .capsule)
+        .fixedSize()
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(time.minutesText) by public transport")
     }
 
     /// A suggestion that stands for several places opens them as a list.
@@ -213,6 +210,56 @@ struct PlaceSearchView: View {
 
     // MARK: Rows
 
+    private var hasShortcuts: Bool {
+        allowsCurrentLocation || places.home != nil || places.work != nil || !places.favorites.isEmpty
+    }
+
+    /// Where you're likely to mean, as one row of chips: one tap, no reading.
+    private var shortcuts: some View {
+        ScrollView(.horizontal) {
+            HStack(spacing: 8) {
+                if allowsCurrentLocation {
+                    chip("Current Location", icon: "location.fill", hint: nil, action: pickCurrentLocation)
+                }
+                if let home = places.home { chip("Home", icon: "house.fill", hint: home.name) { pick(home) } }
+                if let work = places.work { chip("Work", icon: "briefcase.fill", tint: Color(uiColor: .systemBrown), hint: work.name) { pick(work) } }
+                ForEach(places.favorites) { place in
+                    chip(place.name, icon: "mappin", tint: .red, hint: place.subtitle) { pick(place) }
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 6)
+        }
+        .scrollIndicators(.hidden)
+        .listRowInsets(EdgeInsets())
+        .listRowBackground(Color.clear)
+    }
+
+    private func chip(_ title: String, icon: String, tint: Color = Theme.tint, hint: String?, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Label(title, systemImage: icon)
+                .font(.subheadline.weight(.semibold))
+                .lineLimit(1)
+                .foregroundStyle(tint)
+                .padding(.horizontal, 14)
+                .frame(minHeight: 44)
+                .background(tint.opacity(0.14), in: .capsule)
+                .contentShape(.capsule)
+        }
+        .buttonStyle(.plain)
+        .accessibilityHint(hint ?? "")
+    }
+
+    /// A fresh fix: the last one the app heard may be where the trip started.
+    private func pickCurrentLocation() {
+        Task {
+            resolving = true
+            let here = try? await location.current()
+            resolving = false
+            pick(.currentLocation(here ?? location.last ?? .init(latitude: 0, longitude: 0)))
+        }
+    }
+
     private func row(icon: String, tint: Color, title: String, subtitle: String?, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             HStack(spacing: 12) {
@@ -240,7 +287,7 @@ private struct SearchField: ViewModifier {
     var focused: FocusState<Bool>.Binding
     var onSubmit: () -> Void
 
-    private static let prompt = "Places, addresses or shops"
+    private static let prompt = "Search places"
 
     func body(content: Content) -> some View {
         if own {

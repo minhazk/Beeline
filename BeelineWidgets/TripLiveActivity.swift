@@ -22,13 +22,13 @@ struct TripLiveActivity: Widget {
             let state = context.state
             return DynamicIsland {
                 DynamicIslandExpandedRegion(.leading) {
-                    StepIcon(state: state, size: 40).padding(.leading, 4)
+                    StepIcon(state: state, size: 32).padding(.leading, 4)
                 }
                 DynamicIslandExpandedRegion(.trailing) {
                     VStack(alignment: .trailing, spacing: 0) {
                         Text(state.countdownLabel).font(.caption2).foregroundStyle(.secondary)
                         Countdown(to: state.countdownTo)
-                            .font(.title3.weight(.semibold))
+                            .font(.title2.bold())
                             .lineLimit(1)
                     }
                     // A running timer asks for little width, then wraps once it ticks.
@@ -36,26 +36,20 @@ struct TripLiveActivity: Widget {
                     .padding(.trailing, 4)
                 }
                 DynamicIslandExpandedRegion(.center) {
-                    Text(state.title).font(.headline).lineLimit(1)
+                    Text(state.title).font(.headline).lineLimit(2)
                 }
                 DynamicIslandExpandedRegion(.bottom) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        HStack {
-                            Text(state.detail).lineLimit(1)
-                            Spacer()
+                    VStack(alignment: .leading, spacing: 3) {
+                        HStack(alignment: .firstTextBaseline, spacing: 4) {
+                            Text(state.detail).foregroundStyle(.secondary).lineLimit(2)
+                            Spacer(minLength: 0)
                             Text("Arrive \(state.arrival, format: .dateTime.hour().minute())")
+                                .font(.caption).monospacedDigit().fixedSize()
                         }
-                        .foregroundStyle(.secondary)
-                        if let detail = state.missDetail {
-                            HStack(spacing: 5) {
-                                if let cost = state.missCostText {
-                                    Text("If missed \(cost)")
-                                        .fontWeight(.semibold)
-                                        .foregroundStyle(state.missIsCostly ? Palette.warning : .white)
-                                }
-                                Text(detail).foregroundStyle(.secondary)
-                            }
-                            .lineLimit(1)
+                        if context.isStale {
+                            Text("Open Beeline to update").font(.caption).foregroundStyle(.secondary)
+                        } else {
+                            MissedConnectionLine(state: state)
                         }
                     }
                     .font(.footnote)
@@ -63,13 +57,13 @@ struct TripLiveActivity: Widget {
                     .padding(.horizontal, 10)
                 }
             } compactLeading: {
-                StepIcon(state: state, size: 22)
+                StepIcon(state: state, size: 22).accessibilityLabel(state.title)
             } compactTrailing: {
                 Countdown(to: state.countdownTo)
                     .font(.footnote.weight(.semibold))
                     .frame(maxWidth: 52)
             } minimal: {
-                StepIcon(state: state, size: 22)
+                StepIcon(state: state, size: 22).accessibilityLabel(state.title)
             }
             .keylineTint(Palette.accent)
         }
@@ -113,47 +107,56 @@ private struct LockScreenTrip: View {
     var isStale: Bool
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .center, spacing: 12) {
-                StepIcon(state: state, size: 44)
-                VStack(alignment: .leading, spacing: 2) {
+        VStack(alignment: .leading, spacing: 7) {
+            HStack(alignment: .top, spacing: 8) {
+                StepIcon(state: state, size: 32).accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 3) {
                     Text(state.title).font(.headline).lineLimit(2)
-                    Text(state.detail).font(.subheadline).foregroundStyle(Palette.secondaryLabel).lineLimit(2)
-                }
-                .layoutPriority(1)
-                Spacer(minLength: 4)
-                // How long you have, and what it costs you if that isn't enough:
-                // together they say whether to run or there's time for a coffee.
-                VStack(alignment: .trailing, spacing: 0) {
-                    Text(state.countdownLabel).font(.caption).foregroundStyle(Palette.secondaryLabel)
-                    Countdown(to: state.countdownTo).font(.title3.weight(.semibold))
-                    if !isStale, let cost = state.missCostText {
-                        Text("If missed").font(.caption).foregroundStyle(Palette.secondaryLabel).padding(.top, 3)
-                        Text(cost)
-                            .font(.subheadline.weight(.semibold))
-                            .foregroundStyle(state.missIsCostly ? Palette.warning : Palette.label)
+                    if !state.detail.isEmpty {
+                        Text(state.detail).font(.footnote).foregroundStyle(Palette.secondaryLabel).lineLimit(2)
                     }
                 }
+                Spacer(minLength: 0)
+                VStack(alignment: .trailing, spacing: 0) {
+                    Text(state.countdownLabel).font(.caption.weight(.medium)).foregroundStyle(Palette.secondaryLabel)
+                    Countdown(to: state.countdownTo).font(.title2.bold())
+                }
                 .lineLimit(1)
-                .frame(minWidth: 64, alignment: .trailing)
+                .frame(minWidth: 64, idealWidth: 78, maxWidth: 90, alignment: .trailing)
             }
-            VStack(alignment: .leading, spacing: 3) {
-                // Why it costs what it does.
-                if !isStale, let detail = state.missDetail {
-                    Text(detail).fontWeight(.medium).foregroundStyle(Palette.label).minimumScaleFactor(0.85)
-                }
-                HStack(spacing: 6) {
-                    Text(isStale ? "Open Beeline to update" : "Step \(state.step) of \(state.stepCount)")
-                    Spacer(minLength: 4)
-                    Text("\(destination) at \(state.arrival, format: .dateTime.hour().minute())")
-                }
-                .foregroundStyle(Palette.secondaryLabel)
+            if !isStale { MissedConnectionLine(state: state) }
+            HStack(spacing: 6) {
+                Text(isStale ? "Open Beeline to update" : "Step \(state.step) of \(state.stepCount)")
+                    .fixedSize(horizontal: true, vertical: false)
+                Spacer(minLength: 0)
+                Text(destination).lineLimit(1)
+                Text(state.arrival, format: .dateTime.hour().minute()).monospacedDigit().fixedSize()
             }
-            .lineLimit(1)
-            .font(.footnote)
+            .font(.caption)
+            .foregroundStyle(Palette.secondaryLabel)
+            .accessibilityElement(children: .combine)
         }
         .foregroundStyle(Palette.label)
-        .padding(16)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+    }
+}
+
+/// Keep the cost and the fallback service together on both expanded surfaces.
+private struct MissedConnectionLine: View {
+    var state: TripActivityAttributes.ContentState
+
+    var body: some View {
+        if let detail = state.missDetail {
+            if let cost = state.missCostText {
+                let consequence = Text("If missed \(cost)").bold()
+                    .foregroundStyle(state.missIsCostly ? Palette.warning : Palette.label)
+                Text("\(consequence) · \(detail)")
+                    .font(.footnote).foregroundStyle(Palette.secondaryLabel).lineLimit(2)
+            } else {
+                Text(detail).font(.footnote).foregroundStyle(Palette.secondaryLabel).lineLimit(2)
+            }
+        }
     }
 }
 
@@ -179,8 +182,9 @@ private struct Countdown: View {
     var to: Date
 
     var body: some View {
-        if to > .now {
-            Text(timerInterval: Date.now...to, countsDown: true)
+        let now = Date.now
+        if to > now {
+            Text(timerInterval: now...to, countsDown: true)
                 .monospacedDigit()
                 .multilineTextAlignment(.trailing)
         } else {

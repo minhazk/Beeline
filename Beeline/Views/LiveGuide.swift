@@ -17,16 +17,15 @@ struct GuidanceBanner: View {
 
     var body: some View {
         let leg = trip.leg
-        HStack(alignment: .center, spacing: 14) {
+        HStack(alignment: .top, spacing: 10) {
             icon(leg)
             VStack(alignment: .leading, spacing: 2) {
                 primary(leg)
-                    .font(.title2.weight(.bold))
+                    .font(.title3.weight(.bold))
                     .monospacedDigit()
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.7)
+                    .lineLimit(router.isNarrow ? 3 : 2)
                 Text(secondary(leg))
-                    .font(.headline)
+                    .font(.subheadline.weight(.medium))
                     .lineLimit(router.isNarrow ? 3 : 2)
                 if let offer = trip.offerMessage {
                     // A faster way takes the last line: the whole line where it fits, the
@@ -40,17 +39,16 @@ struct GuidanceBanner: View {
                     .foregroundStyle(Theme.tint)
                 } else if let then = then(leg) {
                     // Two lines on a narrow window, so the platform at its end isn't cut.
-                    Text(then).font(.subheadline).foregroundStyle(.white.opacity(0.75)).lineLimit(router.isNarrow ? 2 : 1)
+                    Text(then).font(.footnote).foregroundStyle(.secondary).lineLimit(router.isNarrow ? 2 : 1)
                 }
             }
             Spacer(minLength: 0)
         }
-        .foregroundStyle(.white)
-        .padding(.horizontal, 18)
-        .padding(.vertical, 14)
-        .background(Theme.paper, in: .rect(cornerRadius: 24))
-        .overlay(RoundedRectangle(cornerRadius: 24).strokeBorder(Theme.hairline, lineWidth: 0.5))
-        .shadow(color: .black.opacity(0.2), radius: 10, y: 4)
+        .foregroundStyle(Theme.ink)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .background(Theme.paper, in: .rect(cornerRadius: 14))
+        .shadow(color: .black.opacity(0.16), radius: 4, y: 2)
         .padding(.horizontal, 10)
         // With no status bar above (the Duo's cover) the banner would touch the top edge.
         .padding(.top, router.hasNoTopInset ? 10 : 2)
@@ -64,15 +62,17 @@ struct GuidanceBanner: View {
         Group {
             if leg.mode.isTransit {
                 Image(systemName: leg.mode.symbol)
+                    .frame(width: 36, height: 36)
                     .foregroundStyle((leg.lineColor?.luminance ?? 0) < 0.6 ? Color.white : Color.black)
-                    .background(Circle().fill(leg.lineColor.map(Color.init) ?? .gray).frame(width: 50, height: 50))
-                    .overlay(Circle().strokeBorder(.white.opacity(0.6), lineWidth: 1.5).frame(width: 50, height: 50))
+                    .background(leg.lineColor.map(Color.init) ?? .gray, in: .circle)
+                    .overlay(Circle().strokeBorder(Theme.hairline, lineWidth: 1))
             } else {
                 Image(systemName: Maneuver.symbol(trip.guidance?.instruction ?? (trip.isLastLeg ? "arrive" : nil)))
             }
         }
-        .font(.system(size: 26, weight: .semibold))
-        .frame(width: 50, height: 50)
+        .font(.title3.weight(.semibold))
+        .frame(width: 36, height: 36)
+        .accessibilityHidden(true)
     }
 
     @ViewBuilder private func primary(_ leg: Leg) -> some View {
@@ -91,20 +91,22 @@ struct GuidanceBanner: View {
             } else {
                 Text("Get off at \(leg.toName)")
             }
-        } else if let guidance = trip.guidance {
-            Text(LiveTrip.distanceText(guidance.distance))
+        } else if let instruction = trip.guidance?.instruction {
+            Text(instruction)
+        } else if let ride = trip.nextRide {
+            Text("Walk to \(ride.fromName)")
         } else {
-            Text(leg.duration.minutesText)
+            Text("Walk to \(trip.query.destination.name)")
         }
     }
 
     private func secondary(_ leg: Leg) -> String {
         let line = LinePill.shortName(leg.line ?? leg.mode.label)
         if leg.mode.isTransit {
-            if trip.missedRide { return "Still at \(leg.fromName). See the next ones below." }
+            if trip.missedRide { return "Still at \(leg.fromName) · check departures" }
             if trip.isWaiting {
-                // "via Liverpool Street" stands alone; anything else is where it's going.
-                return "\(line) leaves" + (leg.headsign.map { $0.lowercased().hasPrefix("via") ? " \($0)" : " towards \($0)" } ?? "") + (trip.platform(for: leg).map { ", \(leg.standing(at: $0))" } ?? "")
+                let service = ["Board \(line)", trip.platform(for: leg).map { leg.standing(at: $0) }].compactMap { $0 }.joined(separator: " · ")
+                return service + (leg.headsign.map { $0.lowercased().hasPrefix("via") ? " · \($0)" : " · towards \($0)" } ?? "")
             }
             let arrival = trip.rideArrival
             let minutes = max(0, Int(arrival.timeIntervalSince(trip.now) / 60))
@@ -112,9 +114,11 @@ struct GuidanceBanner: View {
             // The train you're on, once Go knows which, not the one the plan had.
             return trip.yourDeparture.map { "On the \($0.expected.clock): \(when.prefix(1).lowercased() + when.dropFirst())" } ?? when
         }
-        if let instruction = trip.guidance?.instruction { return instruction }
-        if let ride = trip.nextRide { return "Walk to \(ride.fromName)" }
-        return "Walk to \(trip.query.destination.name)"
+        if let guidance = trip.guidance {
+            let distance = LiveTrip.distanceText(guidance.distance)
+            return guidance.instruction != nil ? "In \(distance)" : "\(distance) remaining"
+        }
+        return leg.duration.minutesText
     }
 
     /// What comes after this step.
@@ -144,22 +148,24 @@ struct LiveGuide: View {
     var onSettings: () -> Void
     var onEnd: () -> Void
     @Environment(Router.self) private var router
+    @State private var showsWalk = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: 10) {
             LiveGuideHeader(trip: trip, onSettings: onSettings, onEnd: onEnd)
 
             // A faster way leads, above the step: it's the decision to make now.
             if let offer = trip.offer, let message = trip.offerMessage {
-                ReplanCard(model: .offer(message, journey: offer.journey), compact: router.foldX == nil && router.detent == router.goRest,
+                ReplanCard(model: .offer(message, offer), compact: router.foldX == nil && router.detent == router.goRest,
                            onSwitch: trip.acceptOffer, onKeep: trip.keepRoute)
-            } else if let line = replanLine {
-                ReplanCard(model: line)
             }
 
-            // Where the low sheet has room for one more thing, the step you tap comes first and
-            // the warning follows it.
+            // The low sheet keeps the current step within reach.
             if stepLeads { stepButton }
+
+            if trip.offer == nil, let line = replanLine {
+                ReplanCard(model: line)
+            }
 
             if let connection = trip.connection, let ride = trip.nextRide {
                 ConnectionCard(connection: connection, ride: ride, departure: trip.nextRideDeparture ?? ride.departure,
@@ -171,7 +177,7 @@ struct LiveGuide: View {
                 notice("Next \(LinePill.shortName(next.line)) at \(next.expected.clock)" + (next.arrivalThere.map { ", reaching \(trip.leg.toName) at \($0.clock)" } ?? ""),
                        symbol: "arrow.clockwise", tint: Theme.warning)
             } else if trip.position == nil {
-                notice("Waiting for your location. Steps still move on with the timetable.", symbol: "location.slash", tint: .secondary)
+                notice("Using the timetable until your location is available.", symbol: "location.slash", tint: .secondary)
             }
 
             if let watch = trip.busWatch, trip.nextRide != nil || trip.isWaiting {
@@ -189,15 +195,19 @@ struct LiveGuide: View {
             }
 
             if !trip.leg.mode.isTransit, let walk = trip.walk, !walk.steps.isEmpty {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Walking directions").font(.footnote.weight(.semibold)).foregroundStyle(.secondary)
+                Divider()
+                DisclosureGroup(isExpanded: $showsWalk) {
                     WalkSteps(state: .loaded(walk))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                } label: {
+                    Label("Walking directions", systemImage: "figure.walk")
+                        .font(.subheadline.weight(.medium))
+                        .frame(minHeight: 44)
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(14)
-                .surface()
+                .tint(Theme.tint)
             }
         }
+        .onChange(of: trip.leg.id) { showsWalk = false }
         // An offer raises the sheet so the card and its buttons are whole (wide open it already is).
         .onChange(of: trip.offer?.journey.id) { _, offered in
             if offered != nil, router.foldX == nil, router.detent == router.goRest || router.detent == Router.low { router.settle(.medium) }
@@ -222,25 +232,24 @@ struct LiveGuide: View {
     private var stepLeads: Bool { !router.inTablePose }
 
     @ViewBuilder private var stepButton: some View {
-            if let step = trip.manualStep {
-                VStack(alignment: .leading, spacing: 6) {
-                    Button { trip.take(step) } label: {
-                        Label(title(step), systemImage: symbol(step))
-                            .font(.subheadline.weight(.semibold))
-                            .frame(maxWidth: .infinity, minHeight: 32)
-                    }
-                    .buttonStyle(.bordered)
-                    .tint(Theme.tint)
-                    // On a table the flat half is the control surface: a bigger target.
-                    .controlSize(router.inTablePose ? .large : .regular)
-                    .accessibilityHint("Moves Go on to the next step")
-                    if !stepLeads {
-                        Text("Or tap any step below to jump to it.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                }
+        if let step = trip.manualStep {
+            Button { trip.take(step) } label: {
+                Label(title(step), systemImage: symbol(step))
+                    .font(.headline)
+                    .padding(.horizontal, 6)
+                    .frame(minHeight: 32)
             }
+            .buttonStyle(.bordered)
+            .buttonBorderShape(.capsule)
+            .tint(Theme.tint)
+            .controlSize(router.inTablePose ? .large : .regular)
+            .accessibilityHint("Moves Go on to the next step")
+            if !stepLeads {
+                Text("Or tap a step below to jump to it.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
     }
 
     private func title(_ step: LiveTrip.Step) -> String {
@@ -264,8 +273,7 @@ struct LiveGuide: View {
             Image(systemName: symbol).foregroundStyle(tint)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(14)
-        .surface()
+        .padding(.vertical, 3)
     }
 }
 
@@ -287,19 +295,19 @@ struct LiveGuideHeader: View {
                     .contentTransition(.numericText())
                     .accessibilityAddTraits(.isHeader)
                 Spacer(minLength: 0)
-                Button("Settings", systemImage: "gearshape", action: onSettings)
-                    .labelStyle(.iconOnly)
-                    .font(.body.weight(.semibold))
-                    .frame(width: 44, height: 44)
-                    .glassEffect(.regular.interactive(), in: .circle)
-                    .foregroundStyle(Theme.ink)
+                Button(action: onSettings) {
+                    Label("Settings", systemImage: "gearshape")
+                        .labelStyle(.iconOnly)
+                        .font(.body.weight(.semibold))
+                        .frame(minWidth: 44, minHeight: 44)
+                        .contentShape(.rect)
+                }
+                .foregroundStyle(Theme.ink)
                 Button(action: onEnd) {
                     Text("End")
                         .font(.body.weight(.semibold))
-                        .padding(.horizontal, 18)
-                        .frame(height: 44)
+                        .frame(minWidth: 44, minHeight: 44)
                 }
-                .glassEffect(.regular.tint(Theme.warning.opacity(0.18)).interactive(), in: .capsule)
                 .foregroundStyle(Theme.warning)
                 .accessibilityHint("Stops following the journey")
             }
@@ -337,28 +345,28 @@ private struct ConnectionCard: View {
 
     var body: some View {
         let line = LinePill.shortName(ride.line ?? ride.mode.label)
-        VStack(alignment: .leading, spacing: 6) {
-            Label {
-                // Where to walk to inside the station, without opening the ride's board.
-                Text(headline(line: line, departure: departure) + (platform.map { ", \(ride.standing(at: $0))" } ?? ""))
-                    .font(.subheadline.weight(.semibold))
-            } icon: {
-                Image(systemName: symbol).foregroundStyle(tint)
+        Label {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(verdict).font(.headline)
+                Text("\(departure.clock) \(line)" + (platform.map { " · \(ride.standing(at: $0))" } ?? ""))
+                    .font(.subheadline.weight(.medium)).monospacedDigit()
+                if let advice { Text(advice).font(.footnote).foregroundStyle(.secondary) }
             }
-            if let advice { Text(advice).font(.footnote).foregroundStyle(.secondary) }
+        } icon: {
+            Image(systemName: symbol).foregroundStyle(tint)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(14)
-        .surface()
+        .padding(.vertical, 4)
+        .accessibilityElement(children: .combine)
         .animation(.snappy, value: connection.verdict)
     }
 
-    private func headline(line: String, departure: Date) -> String {
+    private var verdict: String {
         let spare = Int((abs(connection.spare) / 60).rounded())
         switch connection.verdict {
-        case .comfortable: return "\(spare) min to spare for the \(departure.clock) \(line)"
-        case .tight: return "Tight: walk briskly for the \(departure.clock) \(line)"
-        case .missing: return "At this pace you'll miss the \(departure.clock) \(line)"
+        case .comfortable: return "\(spare) min to spare"
+        case .tight: return "Tight connection · walk briskly"
+        case .missing: return "Likely to miss this connection"
         }
     }
 
@@ -368,32 +376,32 @@ private struct ConnectionCard: View {
         case .missing, .tight:
             if let ifMissed { return cost(of: ifMissed) }
             guard let next = board.nextAfterPlanned else { return nil }
-            let cost = board.arrivalDifference(next).map { ", \(Int(($0 / 60).rounded())) min later at \(ride.toName)" } ?? ""
-            return "The next is \(next.expected.clock)\(cost)."
+            let cost = board.arrivalDifference(next).map { " · \($0.signedMinutesText) at \(ride.toName)" } ?? ""
+            return "Next \(next.expected.clock)\(cost)"
         case .comfortable:
             guard let earlier = board.earlierThanPlanned(after: now),
                   earlier.expected > connection.ready, let gain = board.arrivalDifference(earlier), gain < -30 else { return nil }
-            return "You could make the \(earlier.expected.clock): \(Int((-gain / 60).rounded())) min sooner at \(ride.toName)."
+            return "Earlier option \(earlier.expected.clock) · \(Int((-gain / 60).rounded())) min sooner at \(ride.toName)"
         }
     }
 
     /// What missing it does to the whole trip, not just this ride.
     private func cost(of missed: IfMissed) -> String {
-        let next = "The next is \(missed.next.expected.clock)"
-        let change = missed.connection.map { "the \($0.departure.clock) \(LinePill.shortName($0.line ?? $0.mode.label))" }
-        let later: String? = missed.cost.map { minutes in
-            if missed.costIsFloor { return "at least \(max(minutes, 1)) min later at \(destination)" }
-            if minutes == 0 { return "no later at \(destination)" }
-            return minutes > 0 ? "\(minutes) min later at \(destination)" : "\(-minutes) min sooner at \(destination)"
+        var parts = ["Next \(missed.next.expected.clock)"]
+        if let minutes = missed.cost {
+            if missed.costIsFloor {
+                parts.append("at least \(max(minutes, 1)) min later at \(destination)")
+            } else if minutes == 0 {
+                parts.append("same arrival")
+            } else {
+                parts.append("\(abs(minutes)) min \(minutes > 0 ? "later" : "sooner") at \(destination)")
+            }
         }
-        switch (change, missed.losesConnection, later) {
-        case let (change?, true, later?): return "\(next), but then you'd miss \(change): \(later)."
-        case let (change?, true, nil): return "\(next), but then you'd miss \(change)."
-        case let (change?, false, _) where (missed.cost ?? 0) == 0:
-            return "\(next) and still makes \(change), so you'd arrive no later."
-        case let (_, _, later?): return "\(next), \(later)."
-        default: return "\(next)."
+        if let change = missed.connection {
+            let line = LinePill.shortName(change.line ?? change.mode.label)
+            parts.append("\(missed.losesConnection ? "misses" : "makes") \(change.departure.clock) \(line)")
         }
+        return parts.joined(separator: " · ")
     }
 
     private var symbol: String {
