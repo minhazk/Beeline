@@ -16,7 +16,9 @@
   "triggers": { "crons": ["*/2 * * * *"] },
   // APNS_TEAM_ID (your Apple team ID) and APNS_TOPIC (the app's bundle ID, BEELINE_BUNDLE_ID)
   // are vars in wrangler.local.jsonc, or secrets. Secrets (wrangler secret put): APP_TOKEN,
-  // shared with the app; APNS_KEY and APNS_KEY_ID, the .p8 push key. TFL_APP_KEY is optional.
+  // shared with the app; APNS_KEY and APNS_KEY_ID, the .p8 push key; TFL_APP_KEY, a free key
+  // from api-portal.tfl.gov.uk. It's needed once deployed: TfL answers keyless requests from
+  // Cloudflare's shared addresses with 429 (rate limited), and /health says "tflKey": false.
   // MAX_DEVICES (a var, default 100) caps how many phones can register.
   "d1_databases": [
     {

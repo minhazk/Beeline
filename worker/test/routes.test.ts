@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { timingSafeEqual } from "node:crypto";
-import { after, before, test } from "node:test";
+import { after, afterEach, before, test } from "node:test";
 import worker, { maxDevices } from "../src/index.ts";
 import { contract, fixture, sqliteD1 } from "./helpers.ts";
 
@@ -10,14 +10,18 @@ import { contract, fixture, sqliteD1 } from "./helpers.ts";
 const fakeDB = sqliteD1;
 const realFetch = globalThis.fetch;
 const upstreamRequests: URL[] = [];
+/** What TfL answers beyond its line catalog, in the status tests. */
+let upstream: ((url: URL) => Response) | undefined;
 before(() => {
   globalThis.fetch = async (input) => {
     const url = new URL(input instanceof Request ? input.url : String(input));
     upstreamRequests.push(url);
     if (url.pathname.startsWith("/Line/Mode/")) return Response.json(fixture("tfl-lines.json"));
+    if (upstream) return upstream(url);
     throw new Error("Unexpected upstream request " + url.pathname);
   };
 });
+afterEach(() => { upstream = undefined; });
 after(() => { globalThis.fetch = realFetch; });
 
 const token = "cd".repeat(32);
@@ -132,10 +136,10 @@ test("a line id can't climb out of TfL's /Line/ path", async () => {
   assert.equal(response.status, 400);
 });
 
-test("health says whether pushes can go out, and nothing more", async () => {
+test("health says whether pushes can go out and TfL is asked with a key, and nothing more", async () => {
   const health = async (env: object) => (await worker.fetch(new Request("https://alerts.example.com/health"), { DB: fakeDB(), ...env } as any, {} as ExecutionContext)).json();
-  assert.deepEqual(await health({}), { ok: true, pushes: false });
-  assert.deepEqual(await health({ APNS_KEY: "k", APNS_KEY_ID: "K", APNS_TEAM_ID: "T", APNS_TOPIC: "com.cloudslope.beeline" }), { ok: true, pushes: true });
+  assert.deepEqual(await health({}), { ok: true, pushes: false, tflKey: false });
+  assert.deepEqual(await health({ APNS_KEY: "k", APNS_KEY_ID: "K", APNS_TEAM_ID: "T", APNS_TOPIC: "com.cloudslope.beeline", TFL_APP_KEY: "tfl-key" }), { ok: true, pushes: true, tflKey: true });
 });
 
 test("MAX_DEVICES: unset is 100, 0 takes no new phones, nonsense is 100; a number from wrangler works", async () => {
@@ -186,4 +190,58 @@ test("unknown and mismatched lines are rejected using a fixed TfL catalog endpoi
   }
   assert.equal(upstreamRequests.length - before, 2);
   assert.ok(upstreamRequests.slice(before).every(u => u.pathname.startsWith("/Line/Mode/")));
+});
+
+/** TfL with good service on every line asked about and no closures or planned works, except
+ * that the requests `fails` picks get a 500. */
+const tfl = (fails: (url: URL) => boolean) => (url: URL) => {
+  if (fails(url)) return new Response("", { status: 500 });
+  if (url.pathname.startsWith("/StopPoint/") || url.pathname.includes("/to/")) return Response.json([]);
+  const ids = decodeURIComponent(url.pathname.split("/")[2]).split(",");
+  return Response.json(ids.map((id) => ({ id, name: id, lineStatuses: [{ statusSeverity: 10, statusSeverityDescription: "Good Service", reason: "", validityPeriods: [] }] })));
+};
+
+async function statusOf(fails: (url: URL) => boolean) {
+  upstream = tfl(fails);
+  const res = await call({ DB: fakeDB(), APP_TOKEN: "app-token" }, "POST", "/v1/status", undefined, contract());
+  return { code: res.status, body: (await res.json()) as any };
+}
+
+// The contract's two alerts: the Elizabeth line (its own batch) and the District (in the tube's).
+const [elizabeth, district] = contract().alerts;
+
+for (const [what, fails] of [
+  ["a line batch", (u: URL) => u.pathname.includes("district") && !u.pathname.includes("/to/")],
+  ["a mode's station closures", (u: URL) => u.pathname === "/StopPoint/Mode/tube/Disruption"],
+] as const) {
+  test(`status: ${what} TfL didn't answer leaves out only the alerts riding it, listed as unchecked`, async (t) => {
+    t.mock.method(console, "warn", () => {});
+    const { code, body } = await statusOf(fails);
+    assert.equal(code, 200);
+    assert.deepEqual(body.alerts, [{ id: elizabeth.id, issues: [], upcoming: [] }], "no verdict an older build would show as good service");
+    assert.deepEqual(body.unchecked, [district.id]);
+  });
+}
+
+test("status: planned works TfL didn't give are unknown, not none, and only for the alerts that ride the line", async (t) => {
+  t.mock.method(console, "warn", () => {});
+  const { code, body } = await statusOf((u) => u.pathname.startsWith("/Line/elizabeth/Status/") && u.pathname.includes("/to/"));
+  assert.equal(code, 200);
+  assert.deepEqual(body.alerts, [{ id: elizabeth.id, issues: [], upcoming: [], upcomingUnknown: true }, { id: district.id, issues: [], upcoming: [] }]);
+  assert.deepEqual(body.unchecked, []);
+});
+
+test("status: with every line checked, nothing is unchecked", async () => {
+  const { code, body } = await statusOf(() => false);
+  assert.equal(code, 200);
+  assert.match(body.checkedAt, /^\d{4}-\d\d-\d\dT/);
+  assert.deepEqual(body.alerts.map((a: any) => a.id), [elizabeth.id, district.id]);
+  assert.deepEqual(body.unchecked, []);
+});
+
+test("status: TfL failing every query is a 503, not a list of unchecked alerts", async (t) => {
+  t.mock.method(console, "warn", () => {});
+  const { code, body } = await statusOf(() => true);
+  assert.equal(code, 503);
+  assert.match(body.error, /TfL/);
 });

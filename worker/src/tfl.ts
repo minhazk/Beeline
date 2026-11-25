@@ -1,5 +1,6 @@
 // TfL's Unified API: line statuses (with the stations each disruption covers) and
-// station closures. Free and keyless at this volume (50 requests a minute without a key).
+// station closures. Free. Without a key TfL allows each address 50 requests a minute, and a
+// Worker's addresses are shared with the rest of Cloudflare, so a deployed one needs TFL_APP_KEY.
 
 export interface LineStatus {
   lineId: string;
@@ -57,18 +58,42 @@ export async function fetchTfL(url: string, ttl: number, appKey?: string, timeou
   const key = new Request(url);
   const hit = await edge?.match(key);
   if (hit) return hit.json();
+  // Carries the key, so it's never logged or put in an error: `url` is.
   const target = appKey ? `${url}${url.includes("?") ? "&" : "?"}app_key=${encodeURIComponent(appKey)}` : url;
   const get = () => fetch(target, { headers: { "User-Agent": USER_AGENT, Accept: "application/json" }, ...(timeoutMs ? { signal: AbortSignal.timeout(timeoutMs) } : {}) });
-  let response = await get();
-  // Without a key, TfL limits each address, and Cloudflare's are shared: try once more.
-  if (response.status === 429 && !appKey) {
-    await new Promise((resolve) => setTimeout(resolve, 1500));
-    response = await get();
+  let body: string;
+  try {
+    let response = await get();
+    // TfL limits each key and each keyless address (Cloudflare's are shared): wait as long as it
+    // asks, then try once more.
+    if (response.status === 429) {
+      await new Promise((resolve) => setTimeout(resolve, retryDelay(response.headers.get("Retry-After"))));
+      response = await get();
+    }
+    if (!response.ok) throw new TfLRefused(response.status, url);
+    body = await response.text();
+  } catch (error) {
+    const { pathname, search } = new URL(url);
+    console.warn("TfL request failed:", error instanceof TfLRefused ? error.status : (error as Error)?.name ?? String(error), pathname + search);
+    throw error;
   }
-  if (!response.ok) throw new Error(`TfL ${response.status} for ${url}`);
-  const body = await response.text();
   await edge?.put(key, new Response(body, { headers: { "Cache-Control": `max-age=${ttl}`, "Content-Type": "application/json" } }));
   return JSON.parse(body);
+}
+
+class TfLRefused extends Error {
+  status: number;
+  constructor(status: number, url: string) {
+    super(`TfL ${status} for ${url}`);
+    this.status = status;
+  }
+}
+
+/** TfL's Retry-After in whole seconds, held to 1–3 s so a phone isn't kept waiting; 1.5 s when it
+ * doesn't say. */
+export function retryDelay(header: string | null): number {
+  const seconds = /^\d+$/.test(header?.trim() ?? "") ? Number(header) : NaN;
+  return Number.isFinite(seconds) ? Math.min(3, Math.max(1, seconds)) * 1000 : 1500;
 }
 
 const time = (s: unknown): number | undefined => {

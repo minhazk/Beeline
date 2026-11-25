@@ -197,11 +197,14 @@ send notifications to your build of the app, and sign the app with the push enti
    pnpm exec wrangler secret put APP_TOKEN                           # one invitation per line
    pnpm exec wrangler secret put APNS_KEY < AuthKey_ABC123DEFG.p8    # the whole key file, read from stdin
    pnpm exec wrangler secret put APNS_KEY_ID                         # the key's 10-character ID
-   pnpm exec wrangler secret put TFL_APP_KEY                         # optional
+   pnpm exec wrangler secret put TFL_APP_KEY                         # free from api-portal.tfl.gov.uk
    ```
-7. `pnpm run deploy`. Check `https://<your worker>/health` says `{"ok":true,"pushes":true}`;
+   The TfL key is needed: Cloudflare's addresses are shared, and TfL answers keyless requests
+   from them with 429 (rate limited), so without one line checks fail.
+7. `pnpm run deploy`. Check `https://<your worker>/health` says `{"ok":true,"pushes":true,"tflKey":true}`;
    `"pushes":false` means one of `APNS_KEY`, `APNS_KEY_ID`, `APNS_TEAM_ID` or `APNS_TOPIC` is
    missing, and until it's set the cron judges nothing, so no disruption is lost.
+   `"tflKey":false` means `TFL_APP_KEY` isn't set.
 8. Open Line alerts → Connect alerts server in a build without a configured service. Enter the server address and **that phone’s invitation**,
    then tap Use this server. Under Line alerts, save an alert, allow notifications, and choose Send a test notification.
 
@@ -218,7 +221,7 @@ gets its own device secret and the token entered with it, never the built-in one
 of one server's is sent to another. If the former server is unreachable, Settings reports the failure
 and the phone retries the removal on a later launch.
 
-The alerts worker checks line and mode selections against TfL's rail catalog. Each enrollment can request up to 12 registrations, status refreshes or notification tests per minute at a Cloudflare location. The scheduler uses separate batches for each mode and retries incomplete results at the next check.
+The alerts worker checks line and mode selections against TfL's rail catalog. Each enrollment can request up to 12 registrations, status refreshes or notification tests per minute at a Cloudflare location. The scheduler uses separate batches for each mode and retries incomplete results at the next check. A status refresh answers for the alerts TfL could check and lists the rest as `unchecked`, with no verdict; planned works it couldn't get are marked `upcomingUnknown`. Only when no alert could be checked does it fail (503).
 
 Development: `pnpm test` runs offline against the recorded TfL responses in
 `BeelineTests/Fixtures`, which the app's tests share (`alert-contract.json` is the JSON the

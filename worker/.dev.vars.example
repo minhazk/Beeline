@@ -4,3 +4,5 @@ APP_TOKEN=
 # Apple Push Notifications key (developer.apple.com, Keys): the .p8 file's contents and its key ID.
 APNS_KEY=
 APNS_KEY_ID=
+# TfL key (api-portal.tfl.gov.uk). Optional locally; needed deployed, where TfL rate-limits Cloudflare's shared addresses.
+TFL_APP_KEY=

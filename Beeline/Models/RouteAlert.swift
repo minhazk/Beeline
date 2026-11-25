@@ -220,11 +220,16 @@ struct RouteAlert: Codable, Hashable, Identifiable, Sendable {
 struct AlertStatus: Decodable, Sendable {
     var checkedAt: Date
     var alerts: [Entry]
+    /// Alerts TfL couldn't be asked about this time. They're left out of `alerts`, so an
+    /// older build shows no verdict for them rather than a wrong one.
+    var unchecked: [String] = []
 
-    struct Entry: Decodable, Sendable {
+    struct Entry: Decodable, Equatable, Sendable {
         var id: String
         var issues: [Issue]
         var upcoming: [Issue]
+        /// TfL didn't say what's planned, so an empty `upcoming` means unknown, not none.
+        var upcomingUnknown = false
     }
 
     struct Issue: Decodable, Hashable, Sendable, Identifiable {
@@ -267,8 +272,29 @@ struct AlertStatus: Decodable, Sendable {
             }
         }
         return AlertStatus(checkedAt: checkedAt, alerts: alerts.prefix(64).map {
-            Entry(id: String($0.id.prefix(64)), issues: cut($0.issues), upcoming: cut($0.upcoming))
-        })
+            Entry(id: String($0.id.prefix(64)), issues: cut($0.issues), upcoming: cut($0.upcoming), upcomingUnknown: $0.upcomingUnknown)
+        }, unchecked: unchecked.prefix(64).map { String($0.prefix(64)) })
+    }
+}
+
+// In extensions, so the memberwise initialisers stay.
+extension AlertStatus {
+    /// Servers from before partial answers send no `unchecked`: everything was checked.
+    init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        try self.init(checkedAt: container.decode(Date.self, forKey: .checkedAt),
+                      alerts: container.decode([Entry].self, forKey: .alerts),
+                      unchecked: container.decodeIfPresent([String].self, forKey: .unchecked) ?? [])
+    }
+}
+
+extension AlertStatus.Entry {
+    init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        try self.init(id: container.decode(String.self, forKey: .id),
+                      issues: container.decode([AlertStatus.Issue].self, forKey: .issues),
+                      upcoming: container.decode([AlertStatus.Issue].self, forKey: .upcoming),
+                      upcomingUnknown: container.decodeIfPresent(Bool.self, forKey: .upcomingUnknown) ?? false)
     }
 }
 
