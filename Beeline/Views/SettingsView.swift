@@ -74,14 +74,23 @@ struct SettingsView: View {
     }
 
     private func settingsRow(_ title: String, icon: String, color: Color, value: String? = nil) -> some View {
-        HStack(spacing: 12) {
-            Image(systemName: icon).foregroundStyle(color)
-                .frame(width: 32, height: 32).background(color.opacity(0.14), in: .rect(cornerRadius: 9))
-            Text(title)
-            Spacer()
-            if let value { Text(value).font(.subheadline).foregroundStyle(.secondary) }
+        Label {
+            HStack {
+                Text(title)
+                if let value {
+                    Spacer()
+                    Text(value).font(.subheadline).foregroundStyle(.secondary)
+                }
+            }
+        } icon: {
+            Image(systemName: icon)
+                .foregroundStyle(color)
+                .background {
+                    RoundedRectangle(cornerRadius: 7)
+                        .fill(color.opacity(0.14))
+                        .frame(width: 28, height: 28)
+                }
         }
-        .padding(.vertical, 3)
     }
 
     private func placeButton(_ slot: SavedSlot, place: Place?) -> some View {
