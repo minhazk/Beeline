@@ -17,7 +17,7 @@ settings:
     Debug:
       BEELINE_DISPLAY_NAME: Beeline
     Release:
-      BEELINE_DISPLAY_NAME: Beeline Home
+      BEELINE_DISPLAY_NAME: "Beeline: Maps and Navigation"
   base:
     CODE_SIGN_STYLE: Automatic
     SWIFT_VERSION: "6.0"

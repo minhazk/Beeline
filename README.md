@@ -1,6 +1,6 @@
 # Beeline
 
-Beeline is an iOS fork of [Polaris](https://github.com/VDEData/polaris). The Xcode project and scheme are named `Beeline`. App Store Connect and TestFlight list it as **Beeline Home** under the bundle ID `com.cloudslope.beeline`.
+Beeline is an iOS fork of [Polaris](https://github.com/VDEData/polaris). The Xcode project and scheme are named `Beeline`. App Store Connect and TestFlight list it as **Beeline: Maps and Navigation** under the bundle ID `com.cloudslope.beeline`.
 
 An iOS app for getting around London (and the rest of Great Britain) that asks several
 journey planners the same question and shows every answer in one ranked list, because
