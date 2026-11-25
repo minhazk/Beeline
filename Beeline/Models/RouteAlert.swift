@@ -279,6 +279,8 @@ struct AlertStatus: Decodable, Sendable {
 
 // In extensions, so the memberwise initialisers stay.
 extension AlertStatus {
+    private enum CodingKeys: String, CodingKey { case checkedAt, alerts, unchecked }
+
     /// Servers from before partial answers send no `unchecked`: everything was checked.
     init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -289,6 +291,8 @@ extension AlertStatus {
 }
 
 extension AlertStatus.Entry {
+    private enum CodingKeys: String, CodingKey { case id, issues, upcoming, upcomingUnknown }
+
     init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         try self.init(id: container.decode(String.self, forKey: .id),
