@@ -17,8 +17,9 @@ import * as valid from "./validate.ts";
 type AppEnv = { Bindings: Env; Variables: { enrollmentHash: string } };
 const app = new Hono<AppEnv>();
 
-// Whether pushes can go out, so a missing push setting shows; never which values are set.
-app.get("/health", (c) => c.json({ ok: true, pushes: canPush(c.env) }));
+// Whether pushes can go out and TfL is asked with a key, so a missing setting shows; never the
+// values themselves.
+app.get("/health", (c) => c.json({ ok: true, pushes: canPush(c.env), tflKey: Boolean(c.env.TFL_APP_KEY) }));
 
 // Nothing is told before the token passes: no version, no setup, no counts.
 app.use("/v1/*", async (c, next) => {
@@ -102,7 +103,9 @@ app.delete("/v1/devices/:token", async (c) => {
   return c.json({ ok: true });
 });
 
-/** What TfL says about each alert now, and planned works on the times you travel this week. */
+/** What TfL says about each alert now, and planned works on the times you travel this week.
+ * Alerts TfL couldn't answer for are listed in `unchecked` and left out of `alerts`, so no build
+ * shows them as good service. */
 app.post("/v1/status", async (c) => {
   const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
   const alerts = valid.alerts(body.alerts);
@@ -128,9 +131,12 @@ app.post("/v1/devices/:token/test", async (c) => {
   // What's wrong now if TfL answers; the point is proving delivery, so not if it doesn't.
   const statuses = await status(c.env, alerts, row.time_zone, now).then((s) => s.alerts, () => []);
   const withIssues = statuses.find((s) => s.issues.length);
-  const alert = alerts.find((a) => a.id === (withIssues?.id ?? alerts[0].id))!;
+  // Good service is said only of a line TfL answered for.
+  const known = withIssues ?? statuses[0];
+  const alert = alerts.find((a) => a.id === (known?.id ?? alerts[0].id))!;
+  const good = known ? `Good service on ${lineList(alert)} now. ` : "";
   const issues: Issue[] = withIssues?.issues.map((i) => ({ ...i, signature: "test", line: "", from: undefined })) ?? [
-    { signature: "test", severity: "delays", line: "", title: "Test: alerts are on", detail: `Good service on ${lineList(alert)} now. A closure or delay will come through like this.` },
+    { signature: "test", severity: "delays", line: "", title: "Test: alerts are on", detail: `${good}A closure or delay will come through like this.` },
   ];
   if (!canPush(c.env)) return c.json({ error: "The alert server has no push key yet, so it can't send notifications." }, 503);
   const current = await c.env.DB.prepare("SELECT revision FROM devices WHERE token = ?1 AND secret_hash = ?2")
@@ -154,8 +160,9 @@ app.onError((error, c) => {
 });
 
 async function status(env: Env, alerts: Alert[], timeZone: string, now: number) {
+  const checkedAt = new Date(now).toISOString();
   const segments = alerts.flatMap((a) => a.segments);
-  if (!segments.length) return { checkedAt: new Date(now).toISOString(), alerts: alerts.map((a) => ({ id: a.id, issues: [], upcoming: [] })) };
+  if (!segments.length) return { checkedAt, alerts: alerts.map((a) => ({ id: a.id, issues: [], upcoming: [] })), unchecked: [] };
   const catalog = await lineCatalog(env.TFL_APP_KEY);
   validateLines(alerts, catalog);
   const hasPlannedTimes = alerts.some((a) => travelRanges(a, now, timeZone, 8).length);
@@ -166,24 +173,39 @@ async function status(env: Env, alerts: Alert[], timeZone: string, now: number) 
     stationChecks(segments, env.TFL_APP_KEY),
     hasPlannedTimes ? lineChecks(segments, catalog, env.TFL_APP_KEY, { from: hour, to: hour + 9 * 86400_000 }) : undefined,
   ]);
-  if (current.missing.size || stops.missing.size || planned?.missing.size) {
-    throw new TfLUnavailable("TfL could not check every line. Try again later.");
-  }
+  // One line or mode TfL didn't answer for costs only the alerts that ride it.
+  const unchecked = new Set(alerts.filter((a) => a.segments.some((s) => current.missing.has(s.line.id) || stops.missing.has(s.mode))));
+  if (alerts.every((a) => !a.segments.length || unchecked.has(a))) throw new TfLUnavailable("TfL couldn't be reached just now. Try again in a minute.");
+  const checked = alerts.filter((a) => !unchecked.has(a));
   const lines = current.lines, stations = stops.stations, ahead = planned?.lines ?? [];
-  const ways = alerts.flatMap(eachWay);
+  const ways = checked.flatMap(eachWay);
   const maps = await loadLineMaps([...new Set([...linesToPlace(ways, lines, stations), ...linesToPlace(ways, ahead, stations)])], env.TFL_APP_KEY);
   const shown = (issues: Issue[]) => issues.map(({ severity, title, detail, from }) => ({ severity, title, detail, from: from && new Date(from).toISOString() }));
   return {
-    checkedAt: new Date(now).toISOString(),
-    alerts: alerts.map((alert) => {
+    checkedAt,
+    alerts: checked.map((alert) => {
       // Now: the way of the time you're in; outside your times, every way any of them goes, so
       // nothing a time would show is hidden.
       const live = issuesFor(during(alert, activeWindows(alert, now, timeZone)), lines, stations, { at: now }, maps);
       const liveText = new Set(live.map((i) => i.detail));
-      const upcoming = issuesInRanges(alert, ahead, stations, travelRanges(alert, now, timeZone, 8), maps).filter((i) => !liveText.has(i.detail));
+      const ranges = travelRanges(alert, now, timeZone, 8);
+      // Planned works TfL didn't give are unknown, not none.
+      if (ranges.length && alert.segments.some((s) => planned?.missing.has(s.line.id))) {
+        return { id: alert.id, issues: shown(live), upcoming: [], upcomingUnknown: true };
+      }
+      const upcoming = issuesInRanges(alert, ahead, stations, ranges, maps).filter((i) => !liveText.has(i.detail));
       return { id: alert.id, issues: shown(live), upcoming: shown(upcoming) };
     }),
+    unchecked: alerts.filter((a) => unchecked.has(a)).map((a) => a.id),
   };
+}
+
+let toldNoKey = false;
+/** Once per isolate, so a deployment without a key says why its checks fail. */
+function warnWithoutKey(env: Env) {
+  if (env.TFL_APP_KEY || env.TFL_BASE || toldNoKey) return;
+  toldNoKey = true;
+  console.warn("TFL_APP_KEY is not set: TfL rate-limits Cloudflare's shared addresses, so line checks will fail");
 }
 
 function digest(text: string): Promise<ArrayBuffer> {
@@ -199,9 +221,10 @@ async function sha256(text: string): Promise<string> {
 }
 
 export default {
-  fetch: (request: Request, env: Env, ctx: ExecutionContext) => (useLocalTfL(env.TFL_BASE), app.fetch(request, env, ctx)),
+  fetch: (request: Request, env: Env, ctx: ExecutionContext) => (useLocalTfL(env.TFL_BASE), warnWithoutKey(env), app.fetch(request, env, ctx)),
   async scheduled(_event: ScheduledController, env: Env, ctx: ExecutionContext) {
     useLocalTfL(env.TFL_BASE);
+    warnWithoutKey(env);
     ctx.waitUntil(runChecks(env).then((r) => r.checked && console.log("checked", JSON.stringify(r))));
   },
 } satisfies ExportedHandler<Env>;

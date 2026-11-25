@@ -281,7 +281,7 @@ struct HomeSheet: View {
                                     Text(alert.displayName).font(.caption).foregroundStyle(.secondary).lineLimit(1)
                                 }
                                 Spacer(minLength: 8)
-                                LineStatusBadge(status: alerts.status[alert.id], pending: alerts.delivery.pending[alert.id] != nil,
+                                LineStatusBadge(verdict: alerts.verdict(for: alert.id), pending: alerts.delivery.pending[alert.id] != nil,
                                                 configured: alerts.isConfigured)
                                 Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(.tertiary)
                             }
@@ -512,14 +512,14 @@ private struct NearbyRow: View {
 
 /// TfL's verdict on one of your lines as a single coloured word.
 private struct LineStatusBadge: View {
-    var status: AlertStatus.Entry?
+    var verdict: AlertStore.Verdict
     var pending: Bool
     var configured: Bool
 
     var body: some View {
         let look = self.look
         HStack(spacing: 6) {
-            if status?.upcoming.isEmpty == false {
+            if verdict.entry?.upcoming.isEmpty == false {
                 Image(systemName: "calendar")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
@@ -537,8 +537,10 @@ private struct LineStatusBadge: View {
 
     private var look: (word: String, icon: String, color: Color) {
         if pending { return ("Not synced", "exclamationmark.circle.fill", Theme.warning) }
-        guard let status else {
-            return configured ? ("Checking", "ellipsis", .secondary) : ("Off", "bell.slash.fill", .secondary)
+        guard let status = verdict.entry else {
+            if !configured { return ("Off", "bell.slash.fill", .secondary) }
+            // A failed check says nothing about the line, so it stays quiet and says so.
+            return verdict == .unavailable ? ("Not checked", "exclamationmark.circle", .secondary) : ("Checking", "ellipsis", .secondary)
         }
         switch status.issues.map(\.level).max() {
         case .closed?: return ("Closed", "xmark.octagon.fill", Color(uiColor: .systemRed))

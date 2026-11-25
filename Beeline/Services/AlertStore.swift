@@ -22,6 +22,10 @@ final class AlertStore {
 
     /// What TfL says about each alert, by id, from the server.
     private(set) var status: [String: AlertStatus.Entry] = [:]
+    /// Alerts the last finished check couldn't get TfL's answer for.
+    private(set) var unchecked: Set<String> = []
+    /// A check is on its way.
+    private(set) var isChecking = false
     private(set) var checkedAt: Date?
     private(set) var statusProblem: String?
     private(set) var syncProblem: String?
@@ -59,6 +63,8 @@ final class AlertStore {
     private var needsUnregister: Bool { didSet { defaults.set(needsUnregister, forKey: "alerts.needsUnregister") } }
     private var syncing: Task<Void, Never>?
     private var statusTask: Task<Void, Never>?
+    /// Counts checks, so one that was replaced can't say the newer one has finished.
+    private var statusRun = 0
 
     /// The server in use: one entered in Settings (Keychain), else the one built in. Nil until
     /// the Keychain could be read: a locked phone means wait, never another server.
@@ -235,6 +241,7 @@ final class AlertStore {
         }
         server = next
         status = [:]
+        unchecked = []
         checkedAt = nil
         statusProblem = nil
         syncProblem = nil
@@ -295,6 +302,7 @@ final class AlertStore {
         guard saveProblem(for: alert) == nil else { return false }
         if let index = alerts.firstIndex(where: { $0.id == alert.id }) { alerts[index] = alert } else { alerts.append(alert) }
         status[alert.id] = nil
+        unchecked.remove(alert.id)
         needsUnregister = false
         Task {
             await enablePush()
@@ -310,6 +318,9 @@ final class AlertStore {
         }
         alerts.removeAll { $0.id == id }
         status[id] = nil
+        unchecked.remove(id)
+        // A partial answer's message may name the line just removed.
+        if !status.isEmpty { statusProblem = uncheckedProblem(delivery.ready) }
         sync()
     }
 
@@ -400,36 +411,81 @@ final class AlertStore {
 
     // MARK: Status
 
-    /// What TfL says now, at most once a minute.
+    /// What a row shows for one alert.
+    enum Verdict: Equatable, Sendable {
+        /// Not asked about yet, or being asked about now.
+        case checking
+        /// The last check couldn't get TfL's answer for it.
+        case unavailable
+        case ready(AlertStatus.Entry)
+
+        var entry: AlertStatus.Entry? {
+            switch self {
+            case .ready(let entry): entry
+            default: nil
+            }
+        }
+    }
+
+    /// A verdict already in stays up while it's checked again.
+    func verdict(for id: String) -> Verdict {
+        if let entry = status[id] { return .ready(entry) }
+        return unchecked.contains(id) && !isChecking ? .unavailable : .checking
+    }
+
+    /// What TfL says now, at most once a minute while every alert has an answer.
     func refreshStatus(force: Bool = false) async {
         guard let server = currentServer() else { return }
         let watched = delivery.ready
         guard !watched.isEmpty else {
             statusTask?.cancel()
             status = [:]
+            unchecked = []
+            isChecking = false
             checkedAt = nil
             statusProblem = nil
             return
         }
-        if !force, let checkedAt, Date.now.timeIntervalSince(checkedAt) < 60, Set(status.keys) == Set(watched.map(\.id)) { return }
+        let ids = Set(watched.map(\.id))
+        if !force, let checkedAt, Date.now.timeIntervalSince(checkedAt) < 60, Set(status.keys) == ids { return }
         statusTask?.cancel()
+        statusRun += 1
+        let run = statusRun
+        isChecking = true
         let task = Task {
+            defer { if statusRun == run { isChecking = false } }
             do {
                 struct Body: Encodable { var alerts: [RouteAlert.Wire]; var timeZone: String }
                 let body = try JSONEncoder().encode(Body(alerts: watched.map(RouteAlert.Wire.init), timeZone: TimeZone.current.identifier))
                 let result = try AlertStatus.decode(try await send("POST", path: "status", body: body, to: server))
                 guard !Task.isCancelled else { return }
-                status = Dictionary(result.alerts.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+                // One the server couldn't check, or left out, gets no verdict rather than an old one.
+                let skipped = Set(result.unchecked)
+                status = Dictionary(result.alerts.filter { ids.contains($0.id) && !skipped.contains($0.id) }.map { ($0.id, $0) },
+                                    uniquingKeysWith: { a, _ in a })
+                unchecked = ids.subtracting(status.keys)
                 checkedAt = result.checkedAt
-                statusProblem = nil
+                statusProblem = uncheckedProblem(watched)
             } catch is CancellationError {
             } catch let error as URLError where error.code == .cancelled {
             } catch {
-                if !Task.isCancelled { statusProblem = (error as? AlertError)?.message ?? "Couldn't check TfL just now." }
+                guard !Task.isCancelled else { return }
+                // No answer now: an earlier "Good" may no longer be true.
+                status = [:]
+                unchecked = ids
+                statusProblem = (error as? AlertError)?.message ?? "Couldn't check TfL just now."
             }
         }
         statusTask = task
         await task.value
+    }
+
+    /// "TfL couldn't check Stratford ⇄ Gants Hill just now. Try again later."
+    private func uncheckedProblem(_ watched: [RouteAlert]) -> String? {
+        let names = watched.filter { unchecked.contains($0.id) }.map(\.displayName)
+        guard !names.isEmpty else { return nil }
+        let which = names.count <= 2 ? names.formatted(.list(type: .and)) : "\(names.count) of your lines"
+        return "TfL couldn't check \(which) just now. Try again later."
     }
 
     // MARK: Server

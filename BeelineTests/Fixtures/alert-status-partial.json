@@ -1,0 +1,18 @@
+{
+  "checkedAt": "2026-11-25T08:14:03.512Z",
+  "alerts": [
+    {
+      "id": "6F1C2E1A-0B8E-4D59-9C3A-2E7A5D9B1C11",
+      "issues": [
+        {
+          "severity": "delays",
+          "title": "Elizabeth line: severe delays",
+          "detail": "Severe delays between Liverpool Street and Abbey Wood while we fix a signal failure at Whitechapel. Tickets are being accepted on London Buses, DLR and Southeastern."
+        }
+      ],
+      "upcoming": [],
+      "upcomingUnknown": true
+    }
+  ],
+  "unchecked": ["0D7A6C55-41C2-4E0B-8B3F-5A1E2C9D4F22"]
+}
