@@ -32,8 +32,10 @@ struct AlertsView: View {
     private var contentForm: some View {
         Form {
             if store.alerts.isEmpty {
+                // A removal that didn't reach the server is said here too, with Try again.
+                if let problem = store.syncProblem { trouble(problem) }
                 emptyState
-                if !store.isConfigured { connect }
+                if store.isConfigured { server } else { connect }
             } else {
                 // Whatever stops alerts arriving comes first, with the button that fixes it.
                 if !store.isConfigured { connect }
@@ -41,6 +43,7 @@ struct AlertsView: View {
                 if store.isConfigured, needsPermissionAction { notifications }
                 lines
                 if store.isConfigured, !needsPermissionAction { notifications }
+                if store.isConfigured { server }
             }
         }
         .navigationTitle("Line alerts")
@@ -128,13 +131,33 @@ struct AlertsView: View {
 
     // MARK: What needs doing
 
+    private var serverForm: some View {
+        Form { AlertServerSection(draft: serverDraft, focus: $serverField, showsHelp: true) }
+            .navigationTitle("Alerts server")
+            .navigationBarTitleDisplayMode(.inline)
+            .keepsSheetWhenUnfolded(true)
+    }
+
+    /// Within reach once connected too: a server entered wrongly, one no longer trusted, or an
+    /// invitation that was replaced can always be changed or removed.
+    private var server: some View {
+        Section {
+            NavigationLink {
+                serverForm
+            } label: {
+                LabeledContent {
+                    Text(store.server.map { $0.isBuiltIn ? "Built in" : $0.label } ?? "")
+                } label: {
+                    Label("Alerts server", systemImage: "antenna.radiowaves.left.and.right")
+                }
+            }
+        }
+    }
+
     private var connect: some View {
         Section {
             NavigationLink {
-                Form { AlertServerSection(draft: serverDraft, focus: $serverField, showsHelp: true) }
-                    .navigationTitle("Alerts server")
-                    .navigationBarTitleDisplayMode(.inline)
-                    .keepsSheetWhenUnfolded(true)
+                serverForm
             } label: {
                 AlertActionRow(symbol: "antenna.radiowaves.left.and.right.slash",
                                title: "Connect alerts server",

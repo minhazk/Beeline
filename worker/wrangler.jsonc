@@ -5,6 +5,9 @@
   "compatibility_date": "2026-10-01",
   // Device endpoints include the APNs token in the path. Keep application diagnostics only.
   "observability": { "enabled": true, "logs": { "enabled": true, "invocation_logs": false } },
+  // No preview address per uploaded version: each would stay public, running that version's
+  // code with the live secrets and database, after a later version fixed it.
+  "preview_urls": false,
   // Your own deployment's values (a custom-domain "routes" entry, the D1 database_id, the
   // APNs team and topic) go in wrangler.local.jsonc, git-ignored, which `pnpm run deploy`,
   // `pnpm run migrate` and `pnpm run dev` lay over this file (scripts/wrangler.mjs).
@@ -19,7 +22,8 @@
   // shared with the app; APNS_KEY and APNS_KEY_ID, the .p8 push key; TFL_APP_KEY, a free key
   // from api-portal.tfl.gov.uk. It's needed once deployed: TfL answers keyless requests from
   // Cloudflare's shared addresses with 429 (rate limited), and /health says "tflKey": false.
-  // MAX_DEVICES (a var, default 100) caps how many phones can register.
+  // MAX_DEVICES (a var, default 100) caps how many phones can register. MAX_PUSHES_PER_RUN (a
+  // var, default 12, which fits Workers Free) is the most pushes one check sends.
   "d1_databases": [
     {
       "binding": "DB",

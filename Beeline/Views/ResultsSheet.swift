@@ -93,7 +93,10 @@ struct ResultsSheet: View {
                         Section("Open this trip in") {
                             if let reminder = query.time.handoffTimeReminder { Text(reminder) }
                             ForEach(OpenIn.allCases) { app in
+                                // The other app is handed the destination: not one that is
+                                // "where you are" from before location was turned off.
                                 Button(app.name, systemImage: app.symbol) { app.open(query) }
+                                    .disabled(query.destination.isCurrentLocation && location.isDenied)
                             }
                         }
                     } label: {
@@ -143,10 +146,21 @@ struct ResultsSheet: View {
     /// Location: the fix saved with the trip may be from before you moved.
     private func search() async {
         searched = query
+        let asked = query
         var resolved = query
-        if query.origin.isCurrentLocation || query.destination.isCurrentLocation, let here = try? await location.current() {
-            if resolved.origin.isCurrentLocation { resolved.origin.coordinate = here }
-            if resolved.destination.isCurrentLocation { resolved.destination.coordinate = here }
+        if query.origin.isCurrentLocation || query.destination.isCurrentLocation {
+            let here = try? await location.current()
+            // The trip was changed while this waited for a fix: the newer search is the one that counts.
+            guard asked == query else { return }
+            if let here {
+                if resolved.origin.isCurrentLocation { resolved.origin.coordinate = here }
+                if resolved.destination.isCurrentLocation { resolved.destination.coordinate = here }
+            } else if location.isDenied {
+                // Location turned off: where you were when the trip was saved isn't sent to the
+                // planners in its place, and the last search's routes don't stand in for this one's.
+                model.clear(for: query)
+                return
+            }
         }
         model.search(resolved, settings: settings)
     }
@@ -427,7 +441,12 @@ struct ResultsSheet: View {
 
     /// Only worth a line when Apple's estimate beats every route here.
     private func appleHint(_ estimate: AppleEstimate) -> some View {
-        Button { OpenIn.appleMaps.open(query) } label: {
+        Button {
+            // Apple Maps is handed the destination: not one that is "where you are" from before
+            // location was turned off.
+            guard !(query.destination.isCurrentLocation && location.isDenied) else { return }
+            OpenIn.appleMaps.open(query)
+        } label: {
             HStack(spacing: 12) {
                 Image(systemName: "apple.logo").font(.title3).foregroundStyle(.secondary)
                 VStack(alignment: .leading, spacing: 2) {

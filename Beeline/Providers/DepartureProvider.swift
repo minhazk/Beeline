@@ -152,6 +152,7 @@ struct DepartureProvider: Sendable {
     private static func departure(_ time: Response.StopTime) -> Departure? {
         let place = time.place
         guard let scheduled = Time.iso(place.scheduledDeparture) ?? Time.iso(place.departure),
+              let stopCoordinate = Coordinate.checked(latitude: place.lat, longitude: place.lon),
               time.pickupDropoffType != "NOT_ALLOWED" || time.cancelled == true else { return nil }
         let base = TransitousProvider.mode(time.mode)
         guard let line = TransitousProvider.lineName(base, routeShortName: time.routeShortName, displayName: time.displayName,
@@ -163,7 +164,7 @@ struct DepartureProvider: Sendable {
             lineColor: LineColors.color(line: line, mode: mode, providerHex: time.routeColor),
             headsign: time.headsign ?? "",
             stopName: place.name,
-            stopCoordinate: Coordinate(latitude: place.lat, longitude: place.lon),
+            stopCoordinate: stopCoordinate,
             scheduled: scheduled,
             expected: Time.iso(place.departure) ?? scheduled,
             isRealtime: time.realTime ?? false,

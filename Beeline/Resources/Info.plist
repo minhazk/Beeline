@@ -24,13 +24,8 @@
 	<false/>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
-	<key>LSApplicationQueriesSchemes</key>
-	<array>
-		<string>citymapper</string>
-		<string>comgooglemaps</string>
-	</array>
 	<key>NSLocationWhenInUseUsageDescription</key>
-	<string>Beeline plans journeys from where you are, shows what's leaving nearby, and guides you along the way.</string>
+	<string>Beeline plans journeys from where you are, shows what's leaving nearby, and guides you along the way. Your location is sent to the journey planners you use (TfL, Transitous, Google).</string>
 	<key>NSSupportsLiveActivities</key>
 	<true/>
 	<key>UIBackgroundModes</key>

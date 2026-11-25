@@ -20,16 +20,20 @@ struct TransitousProvider: JourneyProvider {
 
     static func parse(_ data: Data, origin: String = "", destination: String = "") throws -> [Journey] {
         let response = try HTTP.decode(Response.self, from: data)
-        let itineraries = (response.itineraries ?? []) + (response.direct ?? [])
+        let itineraries = Array(((response.itineraries ?? []) + (response.direct ?? [])).prefix(Self.maxItineraries))
         let journeys = itineraries.compactMap { it -> Journey? in
             guard let start = Time.iso(it.startTime), let end = Time.iso(it.endTime) else { return nil }
             // MOTIS names the request's own endpoints "START" and "END".
+            // All of it or none: a route missing a leg that couldn't be read would be shown, and
+            // followed in Go, as if that change weren't there.
+            guard end >= start, it.legs.count <= Self.maxLegs else { return nil }
             let legs = it.legs.compactMap(leg).map { leg in
                 var leg = leg
                 if leg.fromName == "START" { leg.fromName = origin }
                 if leg.toName == "END" { leg.toName = destination }
                 return leg
             }
+            guard !legs.isEmpty, legs.count == it.legs.count, Leg.inOrder(legs) else { return nil }
             return Journey(
                 departure: start, arrival: end, legs: legs,
                 sources: [SourceTag(provider: .transitous, variant: "Fastest")])
@@ -38,8 +42,11 @@ struct TransitousProvider: JourneyProvider {
         return journeys
     }
 
+    /// More than was asked for, or than any real journey has, is not read.
+    static let maxItineraries = 24, maxLegs = 40
+
     private static func leg(_ l: Response.Leg) -> Leg? {
-        guard let dep = Time.iso(l.startTime), let arr = Time.iso(l.endTime) else { return nil }
+        guard let dep = Time.iso(l.startTime), let arr = Time.iso(l.endTime), arr >= dep else { return nil }
         let base = mode(l.mode)
         let rawLine = lineName(base, routeShortName: l.routeShortName, displayName: l.displayName,
                                tripShortName: l.tripShortName, agencyName: l.agencyName)
@@ -52,7 +59,7 @@ struct TransitousProvider: JourneyProvider {
             fromName: l.from.name, toName: l.to.name,
             departure: dep, arrival: arr,
             stopCount: mode.isTransit ? (l.intermediateStops?.count ?? 0) + 1 : nil,
-            distanceMeters: l.distance,
+            distanceMeters: l.distance.flatMap(\.plausibleMetres),
             path: path,
             isRealtime: l.realTime ?? false,
             platform: mode.isTransit ? l.from.track.flatMap { $0.isEmpty || $0 == "-" ? nil : $0 } : nil,

@@ -3,7 +3,7 @@ import { inGroups } from "./linechecks.ts";
 // to place the stations TfL names in its notices ("between Paddington and Heathrow Terminals")
 // and to tell which way "westbound" or "towards Heathrow" is for a stretch you ride.
 
-import { fetchTfL, routeSequenceURL } from "./tfl.ts";
+import { fetchTfL, OutOfRequests, routeSequenceURL, type TfLAccess } from "./tfl.ts";
 
 export interface Place {
   /** TfL's ids for it: a hub's platforms and the stops on each route. */
@@ -181,7 +181,10 @@ const held = new Map<string, { map: LineMap; at: number }>();
 const failed = new Map<string, number>();
 
 /** The maps for these lines. One that can't be had is left out, and its trouble counts as now. */
-export async function loadLineMaps(ids: string[], appKey?: string, now = Date.now()): Promise<Map<string, LineMap>> {
+/** `unasked` collects the lines whose order couldn't be asked for at all (the invocation was out
+ * of requests): unlike a TfL that failed, those are worth waiting a run for, since without the
+ * order a notice for one part of a line is told to someone who rides another. */
+export async function loadLineMaps(ids: string[], appKey?: string | TfLAccess, now = Date.now(), unasked?: Set<string>): Promise<Map<string, LineMap>> {
   const maps = new Map<string, LineMap>();
   await inGroups([...new Set(ids)], async (id) => {
     const kept = held.get(id);
@@ -189,11 +192,14 @@ export async function loadLineMaps(ids: string[], appKey?: string, now = Date.no
     if (now - (failed.get(id) ?? -Infinity) < 10 * 60_000) return;
     try {
       // Every push waits on this: a TfL that hangs is a TfL that failed.
-      const map = parseLineMap(id, await fetchTfL(routeSequenceURL(id), SEQUENCE_TTL, appKey, 4000));
+      // A line's order is the same for a week and worth keeping, whoever asks.
+      const map = parseLineMap(id, await fetchTfL(routeSequenceURL(id), SEQUENCE_TTL, typeof appKey === "object" ? { ...appKey, uncached: false } : appKey, 4000));
       if (!map) return;
       held.set(id, { map, at: now });
       maps.set(id, map);
     } catch (error) {
+      // Out of requests this time is not TfL failing: asked again next time, not in ten minutes.
+      if (error instanceof OutOfRequests) return void unasked?.add(id);
       failed.set(id, now);
       console.error("line order unavailable", id, String(error));
     }

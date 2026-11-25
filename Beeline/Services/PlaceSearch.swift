@@ -20,7 +20,12 @@ final class PlaceSearch: NSObject, MKLocalSearchCompleterDelegate {
     }
 
     func bias(to coordinate: Coordinate?) {
-        guard let coordinate else { return }
+        // No fix (location is off, or was just turned off): suggestions aren't centred on one
+        // from before.
+        guard let coordinate else {
+            completer.region = MKCoordinateRegion(.world)
+            return
+        }
         completer.region = MKCoordinateRegion(center: coordinate.clLocation, latitudinalMeters: 60_000, longitudinalMeters: 60_000)
     }
 

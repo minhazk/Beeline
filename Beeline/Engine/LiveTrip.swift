@@ -914,7 +914,8 @@ final class LiveTrip {
     }
 
     static func distanceText(_ metres: Double) -> String {
-        metres < 1000 ? "\(Int((metres / 10).rounded()) * 10) m" : String(format: "%.1f km", metres / 1000)
+        guard metres.isFinite, metres >= 0 else { return "" }
+        return metres < 1000 ? "\(Int((metres / 10).rounded()) * 10) m" : String(format: "%.1f km", metres / 1000)
     }
 }
 

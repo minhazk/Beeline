@@ -56,8 +56,34 @@ enum HTTP {
         configuration.urlCache = nil
         configuration.httpCookieStorage = nil
         configuration.urlCredentialStorage = nil
+        // A reply that trickles in can't hold a request open: a minute for the whole of it.
+        configuration.timeoutIntervalForResource = 60
         return URLSession(configuration: configuration)
     }()
+
+    /// The most a planner's reply may be. A deep search's routes with their drawn paths are a
+    /// few hundred KB; a line's every stop and path, a couple of MB.
+    static let maxResponse = 8 * 1024 * 1024
+
+    /// A reply read as it arrives and refused once it passes `limit` (or says it will), so one
+    /// that never ends is never all in memory.
+    static func bounded(_ request: URLRequest, limit: Int, delegate: any URLSessionTaskDelegate) async throws -> (Data, URLResponse) {
+        let (bytes, response) = try await privateSession.bytes(for: request, delegate: delegate)
+        if response.expectedContentLength > Int64(limit) {
+            bytes.task.cancel()
+            throw ProviderError.badResponse
+        }
+        var data = Data()
+        if response.expectedContentLength > 0 { data.reserveCapacity(Int(response.expectedContentLength)) }
+        for try await byte in bytes {
+            data.append(byte)
+            if data.count > limit {
+                bytes.task.cancel()
+                throw ProviderError.badResponse
+            }
+        }
+        return (data, response)
+    }
 
     static let appUserAgent: String = {
         let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0"
@@ -77,7 +103,7 @@ enum HTTP {
         var request = request
         request.setValue(userAgent(for: request.url), forHTTPHeaderField: "User-Agent")
         request.timeoutInterval = 20
-        let (data, response) = try await privateSession.data(for: request, delegate: ProviderRedirects.shared)
+        let (data, response) = try await bounded(request, limit: maxResponse, delegate: ProviderRedirects.shared)
         let status = (response as? HTTPURLResponse)?.statusCode ?? 0
         guard (200..<300).contains(status) else { throw ProviderError.http(status) }
         return data
@@ -138,7 +164,21 @@ enum Time {
     }
 }
 
+extension Leg {
+    /// Whether these could be one journey's legs, in order: each begins no earlier than a little
+    /// before the last one ends (sources round to the minute, and overlap a walk with a wait).
+    /// One that leaves before the ride before it has arrived isn't a journey anyone can make.
+    static func inOrder(_ legs: [Leg]) -> Bool {
+        zip(legs, legs.dropFirst()).allSatisfy { earlier, later in later.departure >= earlier.arrival.addingTimeInterval(-5 * 60) }
+            && legs.allSatisfy { $0.arrival >= $0.departure }
+    }
+}
+
 enum Polyline {
+    /// More points than any leg's path has: a reply within the size limit can still hold far more
+    /// than is ever drawn, and every one is measured against where you are.
+    static let maxPoints = 20_000
+
     /// Google's encoded polyline format; Google uses precision 5, MOTIS 6 (or 7).
     static func decode(_ encoded: String, precision: Int = 5) -> [Coordinate] {
         guard (0...9).contains(precision) else { return [] }
@@ -169,6 +209,7 @@ enum Polyline {
             let point = Coordinate(latitude: Double(lat) / factor, longitude: Double(lon) / factor)
             guard (-90...90).contains(point.latitude), (-180...180).contains(point.longitude) else { return [] }
             coordinates.append(point)
+            if coordinates.count >= maxPoints { break }
         }
         return coordinates
     }

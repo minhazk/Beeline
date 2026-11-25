@@ -127,15 +127,22 @@ extension Date {
 }
 
 extension TimeInterval {
+    /// To the nearest minute. A length no journey has (not a number, or over a year) is none,
+    /// since converting it to a whole number would stop the app.
+    var wholeMinutes: Int {
+        let minutes = (self / 60).rounded()
+        return minutes.isFinite && abs(minutes) < 525_600 ? Int(minutes) : 0
+    }
+
     /// "26 min", "1 h 05".
     var minutesText: String {
-        let minutes = Int((self / 60).rounded())
+        let minutes = wholeMinutes
         return minutes < 60 ? "\(minutes) min" : String(format: "%d h %02d", minutes / 60, minutes % 60)
     }
 
     /// "+3 min", "−2 min", for comparing one time with another.
     var signedMinutesText: String {
-        let minutes = Int((self / 60).rounded())
+        let minutes = wholeMinutes
         return minutes == 0 ? "same time" : minutes > 0 ? "+\(minutes) min" : "−\(-minutes) min"
     }
 }

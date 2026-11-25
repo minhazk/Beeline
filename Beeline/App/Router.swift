@@ -332,6 +332,9 @@ final class MapScene {
 
     private var homeFix: Coordinate?
 
+    /// Location turned off: where you were isn't kept to centre the map on later.
+    func forgetHomeFix() { homeFix = nil }
+
     func showHome() {
         content = .home
         focusedLeg = nil

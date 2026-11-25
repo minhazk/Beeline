@@ -1,7 +1,11 @@
 node_modules/
 .wrangler/
 .dev.vars
+.dev.vars.*
+!.dev.vars.example
 .apns.env
 # Your own deployment (scripts/wrangler.mjs)
 wrangler.local.jsonc
 wrangler.resolved.jsonc
+# A list of invitations for APP_TOKEN, if you keep one here
+invitations*.txt
