@@ -38,15 +38,17 @@ async function collapseHeader(id: string): Promise<string> {
 
 export async function send(env: ApnsEnv, token: string, environment: Environment, push: Push, now = Date.now()): Promise<Sent> {
   const { jwt, sealed } = await providerToken(env, now);
+  // A Live Activity's pushes go to the app's topic with ".push-type.liveactivity" on the end.
+  const live = push.type === "liveactivity";
   const response = await fetch(`${HOSTS[environment]}/3/device/${token}`, {
     method: "POST",
     redirect: "manual",
     headers: {
       authorization: `bearer ${jwt}`,
-      "apns-topic": String(env.APNS_TOPIC),
-      "apns-push-type": "alert",
+      "apns-topic": live ? `${env.APNS_TOPIC}.push-type.liveactivity` : String(env.APNS_TOPIC),
+      "apns-push-type": live ? "liveactivity" : "alert",
       "apns-priority": String(push.priority),
-      "apns-collapse-id": await collapseHeader(push.collapseId),
+      ...(push.collapseId ? { "apns-collapse-id": await collapseHeader(push.collapseId) } : {}),
       "apns-expiration": String(push.expiration),
       "content-type": "application/json",
     },

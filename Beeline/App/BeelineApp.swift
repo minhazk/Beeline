@@ -28,7 +28,12 @@ struct BeelineApp: App {
                 .environment(location)
                 .environment(AlertStore.shared)
                 .tint(Theme.tint)
-                .task { AlertStore.shared.resume() }
+                .task {
+                    AlertStore.shared.resume()
+                    #if DEBUG
+                    if Demo.showsNextTrain { await Demo.startNextTrain() }
+                    #endif
+                }
         }
     }
 }

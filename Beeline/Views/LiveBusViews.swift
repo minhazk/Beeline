@@ -166,6 +166,9 @@ struct LineSheet: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
                 header
+                if NextTrains.follows(line.mode) {
+                    NextTrainButton(key: NextTrains.key(for: line), mode: line.mode) { await NextTrains.request(for: line) }
+                }
                 if let watch {
                     live(watch)
                 } else {

@@ -7,6 +7,7 @@ import WidgetKit
 struct BeelineWidgets: WidgetBundle {
     var body: some Widget {
         TripLiveActivity()
+        NextTrainLiveActivity()
     }
 }
 
@@ -71,10 +72,13 @@ struct TripLiveActivity: Widget {
 }
 
 /// Trip colours for the Lock Screen and Dynamic Island, which are rendered outside the app.
-private enum Palette {
+enum Palette {
     static let background = dark(.secondarySystemBackground)
     static let label = dark(.label)
     static let secondaryLabel = dark(.secondaryLabel)
+    static let tertiaryLabel = dark(.tertiaryLabel)
+    static let hairline = dark(.separator)
+    static let live = dark(.systemGreen)
     static let accent = dark(.systemBlue)
     static let warning = dark(.systemOrange)
 

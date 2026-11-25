@@ -4,9 +4,11 @@
 import type { Alert, Issue } from "./types.ts";
 
 export interface Push {
+  /** A Live Activity's start, update or end (activities.ts); otherwise a notification. */
+  type?: "liveactivity";
   payload: Record<string, unknown>;
   priority: 5 | 10;
-  collapseId: string;
+  collapseId?: string;
   /** Seconds since 1970 after which APNs stops trying. */
   expiration: number;
 }

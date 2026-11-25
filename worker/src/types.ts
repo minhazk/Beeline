@@ -35,6 +35,9 @@ export interface Alert {
    * (alerts saved before it, and older builds) means both ways. Only trouble TfL says is one
    * way only depends on it. */
   direction?: Direction;
+  /** Start a next-train Live Activity at these times (activities.ts), with the phone's
+   * push-to-start token. */
+  liveActivity?: boolean;
 }
 
 export type Direction = "out" | "back" | "both";

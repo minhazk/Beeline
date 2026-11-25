@@ -3,6 +3,7 @@
 
 import { Hono, type Context } from "hono";
 import { bodyLimit } from "hono/body-limit";
+import { lookup, runActivities } from "./activities.ts";
 import { canPush, send } from "./apns.ts";
 import { emptyState, runChecks, type Env } from "./checks.ts";
 import { loadLineMaps } from "./linemap.ts";
@@ -11,6 +12,7 @@ import { issuesPush, lineList } from "./push.ts";
 import { activeWindows, during, eachWay, travelRanges } from "./schedule.ts";
 import { useLocalTfL } from "./tfl.ts";
 import { lineCatalog, lineChecks, stationChecks, TfLUnavailable, validateLines } from "./linechecks.ts";
+import { FOLLOWED_MODES } from "./trains.ts";
 import type { Alert, Issue } from "./types.ts";
 import * as valid from "./validate.ts";
 
@@ -72,18 +74,20 @@ app.put("/v1/devices/:token", async (c) => {
   const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
   const alerts = valid.alerts(body.alerts);
   if (!alerts.length) throw new valid.Invalid("A registration needs at least one scheduled alert");
+  // The phone's push-to-start token, for saved lines that start a Live Activity themselves.
+  const startToken = body.startToken == null ? null : valid.deviceToken(String(body.startToken));
   await limitFetches(c);
   validateLines(alerts, await lineCatalog(c.env.TFL_APP_KEY));
   // One statement: a phone already stored is updated; a new one only while there's room, so
   // two registrations at once can't both take the last place.
   const result = await c.env.DB.prepare(
-    `INSERT INTO devices (token, environment, time_zone, alerts, state, updated_at, secret_hash, revision, enrollment_hash)
-     SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, lower(hex(randomblob(16))), ?9
+    `INSERT INTO devices (token, environment, time_zone, alerts, state, updated_at, secret_hash, revision, enrollment_hash, start_token)
+     SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, lower(hex(randomblob(16))), ?9, ?10
      WHERE EXISTS (SELECT 1 FROM devices WHERE token = ?1) OR (SELECT COUNT(*) FROM devices) < ?8
-     ON CONFLICT(token) DO UPDATE SET environment = ?2, time_zone = ?3, alerts = ?4, updated_at = ?6, revision = excluded.revision
+     ON CONFLICT(token) DO UPDATE SET environment = ?2, time_zone = ?3, alerts = ?4, updated_at = ?6, revision = excluded.revision, start_token = ?10
      WHERE devices.secret_hash = excluded.secret_hash
      ON CONFLICT(enrollment_hash) DO NOTHING`,
-  ).bind(token, valid.environment(body.environment), valid.timeZone(body.timeZone), JSON.stringify(alerts), JSON.stringify(emptyState()), Date.now(), hash, maxDevices(c.env), enrollment).run();
+  ).bind(token, valid.environment(body.environment), valid.timeZone(body.timeZone), JSON.stringify(alerts), JSON.stringify(emptyState()), Date.now(), hash, maxDevices(c.env), enrollment, startToken).run();
   if (!result.meta?.changes) {
     await rejectOtherOwner(c.env.DB, token, hash);
     if (await c.env.DB.prepare("SELECT 1 FROM devices WHERE enrollment_hash = ?1 AND token != ?2").bind(enrollment, token).first()) {
@@ -144,6 +148,47 @@ app.post("/v1/devices/:token/test", async (c) => {
   return c.json(result, result.status === 200 ? 200 : 502);
 });
 
+/** Live Activities one invitation's phone can have kept up to date at once; a new one takes the
+ * place of the oldest. */
+const MAX_ACTIVITIES = 4;
+
+/** A next-train Live Activity to keep up to date until it ends: what it follows, and what it
+ * should show now, so the phone needn't wait for the next minute's push. */
+app.put("/v1/activities/:token", async (c) => {
+  const token = valid.deviceToken(c.req.param("token"));
+  const hash = await ownerHash(c);
+  const enrollment = c.get("enrollmentHash");
+  const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
+  const now = Date.now();
+  const follow = valid.follow(body.follow);
+  const environment = valid.environment(body.environment);
+  const ends = valid.ends(body.ends, now);
+  if (!FOLLOWED_MODES.has(follow.mode)) throw new valid.Invalid("TfL has no live times for this line");
+  await limitFetches(c);
+  validateLines([{ id: "live", name: "", days: [1], windows: [], minorDelays: true, segments: [follow] }], await lineCatalog(c.env.TFL_APP_KEY));
+  const result = await c.env.DB.prepare(
+    `INSERT INTO activities (token, environment, follow, ends_at, state, updated_at, secret_hash, enrollment_hash)
+     VALUES (?1, ?2, ?3, ?4, '', ?5, ?6, ?7)
+     ON CONFLICT(token) DO UPDATE SET environment = ?2, follow = ?3, ends_at = ?4, updated_at = ?5
+     WHERE activities.secret_hash = excluded.secret_hash`,
+  ).bind(token, environment, JSON.stringify(follow), ends, now, hash, enrollment).run();
+  if (!result.meta?.changes) return c.json({ error: "This Live Activity is registered by another install of Beeline" }, 403);
+  await c.env.DB.prepare(
+    `DELETE FROM activities WHERE enrollment_hash = ?1 AND token NOT IN
+     (SELECT token FROM activities WHERE enrollment_hash = ?1 ORDER BY updated_at DESC, token LIMIT ?2)`,
+  ).bind(enrollment, MAX_ACTIVITIES).run();
+  const state = (await lookup(c.env, [follow], now))(follow);
+  if (state) await c.env.DB.prepare("UPDATE activities SET state = ?1 WHERE token = ?2 AND ends_at = ?3").bind(JSON.stringify(state), token, ends).run();
+  return c.json({ ok: true, state: state ?? null });
+});
+
+app.delete("/v1/activities/:token", async (c) => {
+  const token = valid.deviceToken(c.req.param("token"));
+  const hash = await ownerHash(c);
+  await c.env.DB.prepare("DELETE FROM activities WHERE token = ?1 AND secret_hash = ?2").bind(token, hash).run();
+  return c.json({ ok: true });
+});
+
 app.onError((error, c) => {
   if (error instanceof TooManyRequests) return c.json({ error: "Try again in a minute" }, 429, { "Retry-After": "60" });
   if (error instanceof TfLUnavailable) return c.json({ error: error.message }, 503);
@@ -200,8 +245,12 @@ async function sha256(text: string): Promise<string> {
 
 export default {
   fetch: (request: Request, env: Env, ctx: ExecutionContext) => (useLocalTfL(env.TFL_BASE), app.fetch(request, env, ctx)),
-  async scheduled(_event: ScheduledController, env: Env, ctx: ExecutionContext) {
+  async scheduled(event: ScheduledController, env: Env, ctx: ExecutionContext) {
     useLocalTfL(env.TFL_BASE);
+    if (event.cron === "* * * * *") {
+      ctx.waitUntil(runActivities(env).then((r) => (r.sent || r.started || r.ended) && console.log("live", JSON.stringify(r))));
+      return;
+    }
     ctx.waitUntil(runChecks(env).then((r) => r.checked && console.log("checked", JSON.stringify(r))));
   },
 } satisfies ExportedHandler<Env>;

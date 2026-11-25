@@ -153,6 +153,15 @@ struct JourneySheet: View {
                 .tint(Theme.tint)
                 .accessibilityHint("Follows you along the journey with live walking directions")
 
+                // Just the first train, on the Lock Screen: no directions, no location.
+                if let ride = journey.transitLegs.first(where: { NextTrains.follows($0.mode) }) {
+                    NextTrainButton(key: NextTrains.key(for: ride), mode: ride.mode, compact: !typeSize.isAccessibilitySize) {
+                        if departures.board(ride)?.value == nil { await departures.load(ride) }
+                        return await NextTrains.request(for: ride, board: departures.board(ride)?.value)
+                    }
+                    .fixedSize(horizontal: !typeSize.isAccessibilitySize, vertical: false)
+                }
+
                 ShareLink(item: shareText) {
                     Label("Share", systemImage: "square.and.arrow.up")
                         .font(.headline)

@@ -1,0 +1,28 @@
+{
+  "attributes": {
+    "key": "alert:7D1C2B5E-3F0A-4C8B-9E21-5A6B7C8D9E0F",
+    "line": "Central",
+    "symbol": "tram.fill.tunnel",
+    "color": "E32017",
+    "stop": "Redbridge",
+    "towards": "Liverpool Street",
+    "follow": {
+      "line": { "id": "central", "name": "Central line" },
+      "mode": "tube",
+      "from": { "id": "940GZZLURBG", "name": "Redbridge" },
+      "to": { "id": "940GZZLULVT", "name": "Liverpool Street" },
+      "stations": []
+    },
+    "ends": 1795641000
+  },
+  "content-state": {
+    "trains": [
+      { "at": 1795634274, "cancelled": false },
+      { "at": 1795634664, "cancelled": false, "late": 2 },
+      { "at": 1795634900, "cancelled": true }
+    ],
+    "notice": "Severe delays",
+    "updated": 1795634146,
+    "live": true
+  }
+}

@@ -76,6 +76,17 @@ plus TfL's status if older than 3 minutes), and a trip makes at most 3, answered
 not, 4 minutes apart: 15 requests, Google 3, at most. Nothing goes without a network
 connection, and nothing runs on a timer.
 
+**Next trains on the Lock Screen.** A line near you, a departure board, or a journey (Next
+train, beside Go) can put the next three trains from that station on the Lock Screen and in the
+Dynamic Island: a countdown to the next, and each train as a dot on a line from now, so the gaps
+show at a glance, with late ones and cancellations in orange and trouble TfL reports on your stretch. A saved line can start it by itself at its travel times
+(Next trains on Lock Screen in the alert) and take it away when each time ends. With an alerts
+server and a TfL line (Underground, Elizabeth line, Overground, DLR, trams), the server keeps it
+live while Beeline is closed: each minute it asks TfL for that station's trains, keeps the ones
+that call where you get off (by the line's station order, so a Central line train round the
+Hainault loop isn't yours), and pushes only news: a train gone, a new estimate, a cancellation.
+Without a server, or on National Rail, it shows the timetable, refreshed while Beeline is open.
+
 **Live buses.** Tap a bus line leaving near you, or "Where are the buses?" on a bus
 ride, and London's buses on that line show on the map, each with how soon it reaches
 your stop. TfL publishes no bus GPS, only each bus's predicted arrival at the stops
@@ -205,6 +216,10 @@ send notifications to your build of the app, and sign the app with the push enti
 8. Open Line alerts → Connect alerts server in a build without a configured service. Enter the server address and **that phone’s invitation**,
    then tap Use this server. Under Line alerts, save an alert, allow notifications, and choose Send a test notification.
 
+Next-train Live Activities use the same APNs key (Apple sends them on the app's
+`.push-type.liveactivity` topic). The Worker updates them from a second, once-a-minute cron that
+reads D1 and stops when none is showing; each invitation's phone can have four followed at once.
+
 Each invitation admits one new phone at a time. Existing installations from earlier versions
 retain their registrations. Each install also sends a random device secret so only its owner can
 change, test or remove the registration. Run the database migrations before updating the Worker.
@@ -237,7 +252,9 @@ keeps to these limits, and changes should too:
   Departure boards are one stop-times request per board as it is shown, kept a minute;
   during Go only the next ride's board refreshes, once a minute. A descriptive User-Agent
   with `BEELINE_CONTACT`.
-- **TfL**: network status is two requests per search, kept three minutes. Live buses are one
+- **TfL**: network status is two requests per search, kept three minutes. A next-train Live
+  Activity the alerts server follows is one request a minute for its station's trains (shared by
+  every one at that station, kept 20 seconds), only while one is showing. Live buses are one
   arrivals request every 30 seconds while a bus line is on the map, and each line's route
   once per launch. The alerts server asks TfL only while someone is inside their travel
   times: one line-status and one station-disruptions request per two-minute run, cached a
@@ -291,7 +308,8 @@ MIT. See `LICENSE`.
 - `BeelineTests`: parsers against recorded Google/TfL/Transitous responses, boards, walking progress and leg-by-leg tracking, and the merge and ranking rules.
 - `Beeline/Design/Theme.swift` defines the map and journey colours. The app and its trip Live Activity always use a dark appearance.
 
-Launch flags for checking screens without tapping (Debug only): `-setup` shows the first-run setup step; `-demo -demoReplan
+Launch flags for checking screens without tapping (Debug only): `-setup` shows the first-run setup step;
+`-demoNextTrain` puts canned next Central line trains from Redbridge on the Lock Screen; `-demo -demoReplan
 offer|wait|early` opens Go on a canned trip early onto the Bakerloo, with canned boards
 and a canned planner answer, and asks no source at all; `-demo` plans King's
 Cross → Canary Wharf, `-demoDetail` opens the best journey, `-demoGo` starts it,

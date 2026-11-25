@@ -33,6 +33,8 @@
 	<string>Beeline plans journeys from where you are, shows what's leaving nearby, and guides you along the way.</string>
 	<key>NSSupportsLiveActivities</key>
 	<true/>
+	<key>NSSupportsLiveActivitiesFrequentUpdates</key>
+	<true/>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>location</string>

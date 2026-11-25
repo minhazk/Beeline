@@ -54,6 +54,9 @@ final class AlertStore {
     private let deps: Dependencies
     private var defaults: UserDefaults { deps.defaults }
     private var token: String? { didSet { defaults.set(token, forKey: "alerts.token") } }
+    /// The push-to-start token for the next-train Live Activity, so a saved line can start one
+    /// at its travel times (NextTrains).
+    private var startToken: String? { didSet { defaults.set(startToken, forKey: "alerts.startToken") } }
     /// The token the server last heard, to forget it when the phone gets a new one.
     private var registered: String? { didSet { defaults.set(registered, forKey: "alerts.registered") } }
     private var needsUnregister: Bool { didSet { defaults.set(needsUnregister, forKey: "alerts.needsUnregister") } }
@@ -93,9 +96,9 @@ final class AlertStore {
     private var cleanup: Task<String?, Never>?
 
     #if DEBUG
-    private static let environment = "sandbox"
+    static let environment = "sandbox"
     #else
-    private static let environment = "production"
+    static let environment = "production"
     #endif
 
     init(_ deps: Dependencies = Dependencies()) {
@@ -104,6 +107,7 @@ final class AlertStore {
         alerts = saved
         delivery = RouteAlert.Delivery(saved)
         token = deps.defaults.string(forKey: "alerts.token")
+        startToken = deps.defaults.string(forKey: "alerts.startToken")
         registered = deps.defaults.string(forKey: "alerts.registered")
         needsUnregister = deps.defaults.bool(forKey: "alerts.needsUnregister")
         loadServer()
@@ -330,6 +334,13 @@ final class AlertStore {
         sync()
     }
 
+    /// A new push-to-start token: the server needs it before it can start a Live Activity.
+    func didGetStartToken(_ hex: String) {
+        guard hex != startToken else { return }
+        startToken = hex
+        if !delivery.ready.isEmpty { sync() }
+    }
+
     func didFailToRegister(_ error: any Error) {
         syncProblem = "This phone couldn't get a push token: \(error.localizedDescription)"
     }
@@ -356,7 +367,7 @@ final class AlertStore {
                     if let old = registered, old != token { try await send("DELETE", path: "devices/\(old)", to: server) }
                     try Task.checkCancellation()
                     let body = RouteAlert.Registration(environment: Self.environment, timeZone: TimeZone.current.identifier,
-                                                       alerts: delivery.ready.map(RouteAlert.Wire.init))
+                                                       alerts: delivery.ready.map(RouteAlert.Wire.init), startToken: startToken)
                     try await send("PUT", path: "devices/\(token)", body: JSONEncoder().encode(body), to: server)
                     try Task.checkCancellation()
                     registered = token
@@ -449,6 +460,13 @@ final class AlertStore {
     /// The most a reply may be: a status for 30 alerts is a few KB.
     nonisolated static let maxResponse = 512 * 1024
 
+    /// One request to the server in use, for the next-train Live Activity; nil without one.
+    @discardableResult
+    func sendToServer(_ method: String, path: String, body: Data? = nil) async throws -> Data? {
+        guard let server = currentServer() else { return nil }
+        return try await send(method, path: path, body: body, to: server)
+    }
+
     /// One request to `server`, with its token and, for a phone's own routes, this install's
     /// secret for it. Redirects are refused: the token and secret go to that address only.
     @discardableResult
@@ -458,7 +476,7 @@ final class AlertStore {
         request.httpBody = body
         request.timeoutInterval = 20
         request.setValue("Bearer \(server.token)", forHTTPHeaderField: "Authorization")
-        if path.hasPrefix("devices/") { request.setValue(try deviceSecret(for: server), forHTTPHeaderField: "X-Device-Secret") }
+        if path.hasPrefix("devices/") || path.hasPrefix("activities/") { request.setValue(try deviceSecret(for: server), forHTTPHeaderField: "X-Device-Secret") }
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue(HTTP.appUserAgent, forHTTPHeaderField: "User-Agent")
         let (data, response) = try await deps.transport(request)
@@ -502,6 +520,12 @@ final class NoRedirects: NSObject, URLSessionTaskDelegate, Sendable {
 
 /// Hands push tokens to the alerts.
 final class AppDelegate: NSObject, UIApplicationDelegate {
+    /// Also when iOS wakes Beeline in the background for a Live Activity the server started.
+    func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
+        NextTrains.shared.resume()
+        return true
+    }
+
     func application(_ application: UIApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
         AlertStore.shared.didRegister(deviceToken)
     }

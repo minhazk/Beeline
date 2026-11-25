@@ -10,10 +10,12 @@
   // `pnpm run migrate` and `pnpm run dev` lay over this file (scripts/wrangler.mjs).
   // Copy wrangler.local.example.jsonc to start. Without a "routes" entry the Worker is
   // served on its workers.dev address.
-  // Every two minutes. A run with nobody inside their travel times reads D1 and stops:
+  // Alerts every two minutes. A run with nobody inside their travel times reads D1 and stops:
   // TfL is only asked while someone is travelling, and the evening before for planned works.
+  // Next-train Live Activities every minute (activities.ts), only while one is showing or a
+  // saved line's travel time is starting one.
   "ratelimits": [{ "name": "STATUS_LIMITER", "namespace_id": "1001", "simple": { "limit": 12, "period": 60 } }],
-  "triggers": { "crons": ["*/2 * * * *"] },
+  "triggers": { "crons": ["*/2 * * * *", "* * * * *"] },
   // APNS_TEAM_ID (your Apple team ID) and APNS_TOPIC (the app's bundle ID, BEELINE_BUNDLE_ID)
   // are vars in wrangler.local.jsonc, or secrets. Secrets (wrangler secret put): APP_TOKEN,
   // shared with the app; APNS_KEY and APNS_KEY_ID, the .p8 push key. TFL_APP_KEY is optional.
