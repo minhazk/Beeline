@@ -28,6 +28,8 @@
 	<string>Beeline plans journeys from where you are, shows what's leaving nearby, and guides you along the way. Your location is sent to the journey planners you use (TfL, Transitous, Google).</string>
 	<key>NSSupportsLiveActivities</key>
 	<true/>
+	<key>NSSupportsLiveActivitiesFrequentUpdates</key>
+	<true/>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>location</string>

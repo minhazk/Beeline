@@ -17,6 +17,20 @@ struct RouteAlert: Codable, Hashable, Identifiable, Sendable {
     /// Which way you ride. Nil, as alerts saved before this are, is both ways; the server reads
     /// a missing one the same. Only trouble TfL reports one way only depends on it.
     var direction: Direction?
+    /// Show the next trains on the Lock Screen at these times: the server starts a Live Activity
+    /// when each time begins (worker/src/activities.ts). Nil, as alerts saved before it are, is off.
+    var liveActivity: Bool?
+
+    /// Something the server can start a Live Activity for at one of its times: the stretch it
+    /// boards first going out (the first), or coming back (the last), has stations, on a line TfL
+    /// has live times for. As worker/src/activities.ts `followFor` picks it.
+    var canStartLiveActivity: Bool {
+        func follows(_ segment: Segment?) -> Bool {
+            guard let segment else { return false }
+            return segment.from != nil && segment.to != nil && ["tube", "dlr", "elizabeth-line", "overground", "tram"].contains(segment.mode)
+        }
+        return windows.contains { follows(way(of: $0) == .back ? segments.last : segments.first) }
+    }
 
     enum Direction: String, Codable, CaseIterable, Sendable {
         /// From the first stretch's `from` to the last one's `to`.
@@ -144,6 +158,8 @@ struct RouteAlert: Codable, Hashable, Identifiable, Sendable {
         var environment: String
         var timeZone: String
         var alerts: [Wire]
+        /// The next-train Live Activity's push-to-start token, for alerts that start one.
+        var startToken: String?
     }
 
     /// What's sent: the name is always filled in, so the notification says it.

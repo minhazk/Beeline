@@ -142,6 +142,11 @@ struct BoardSheet: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
                     header
+                    if NextTrains.follows(leg.mode) {
+                        NextTrainButton(key: NextTrains.key(for: leg), mode: leg.mode) {
+                            await NextTrains.request(for: leg, board: departures.board(leg)?.value)
+                        }
+                    }
                     switch departures.board(leg) {
                     case .loaded(let board):
                         ForEach(board.alerts) { AlertLine(alert: $0).padding(.horizontal, 4) }

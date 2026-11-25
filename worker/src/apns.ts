@@ -56,10 +56,11 @@ export async function send(env: ApnsEnv, token: string, environment: Environment
     signal: AbortSignal.timeout(10_000),
     headers: {
       authorization: `bearer ${jwt}`,
-      "apns-topic": String(env.APNS_TOPIC),
+      // A Live Activity's pushes go to the app's topic with ".push-type.liveactivity" on the end.
+      "apns-topic": push.type === "liveactivity" ? `${env.APNS_TOPIC}.push-type.liveactivity` : String(env.APNS_TOPIC),
       "apns-push-type": push.type ?? "alert",
       "apns-priority": String(push.priority),
-      "apns-collapse-id": await collapseHeader(push.collapseId),
+      ...(push.collapseId ? { "apns-collapse-id": await collapseHeader(push.collapseId) } : {}),
       "apns-expiration": String(push.expiration),
       "content-type": "application/json",
     },

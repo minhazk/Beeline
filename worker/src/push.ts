@@ -6,11 +6,13 @@ import type { Alert, Issue } from "./types.ts";
 export interface Push {
   payload: Record<string, unknown>;
   priority: 5 | 10;
-  collapseId: string;
+  /** Notifications only: a Live Activity's pushes have none. */
+  collapseId?: string;
   /** Seconds since 1970 after which APNs stops trying. */
   expiration: number;
-  /** "background" shows nothing on the phone: it only asks Apple whether the token still lives. */
-  type?: "alert" | "background";
+  /** "background" shows nothing on the phone: it only asks Apple whether the token still lives.
+   * "liveactivity" is a next-train Live Activity's start, update or end (activities.ts). */
+  type?: "alert" | "background" | "liveactivity";
 }
 
 /** Nothing the phone shows or keeps: Apple's answer says whether the app is still installed. */

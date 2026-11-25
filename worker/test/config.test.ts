@@ -24,7 +24,7 @@ test("a filled-in local config passes, and is laid over the tracked one", () => 
   const merged = resolve(file("wrangler.jsonc"), local);
   assert.deepEqual(deployProblems(merged), []);
   assert.equal(merged.name, "beeline-alerts");
-  assert.deepEqual(merged.triggers, { crons: ["*/2 * * * *"] });
+  assert.deepEqual(merged.triggers, { crons: ["*/2 * * * *", "* * * * *"] });
 });
 
 test("comments and URLs in strings survive the JSONC reader", () => {

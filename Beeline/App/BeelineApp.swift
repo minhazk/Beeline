@@ -35,7 +35,12 @@ struct BeelineApp: App {
                 .environment(location)
                 .environment(AlertStore.shared)
                 .tint(Theme.tint)
-                .task { AlertStore.shared.resume() }
+                .task {
+                    AlertStore.shared.resume()
+                    #if DEBUG
+                    if Demo.showsNextTrain { await Demo.startNextTrain() }
+                    #endif
+                }
                 // Notifications turned off or on in Settings while Beeline waited in the
                 // background: the server's copy follows as soon as it's back in front.
                 .onChange(of: scenePhase) { _, phase in

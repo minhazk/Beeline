@@ -1,4 +1,5 @@
 #if DEBUG
+import ActivityKit
 import Foundation
 
 /// Launch with `-demo` to plan King's Cross → Canary Wharf straight away (add
@@ -35,5 +36,27 @@ enum Demo {
     static var offline: Bool { replan != nil }
     static let origin = JourneyQuery.londonExample.origin
     static let destination = JourneyQuery.londonExample.destination
+
+    /// `-demoNextTrain`: the next Central line trains from Redbridge on the Lock Screen, canned
+    /// (one late, one cancelled, trouble on the line), without the alerts server.
+    static let showsNextTrain = ProcessInfo.processInfo.arguments.contains("-demoNextTrain")
+
+    @MainActor static func startNextTrain(now: Date = .now) async {
+        func departure(_ minutes: Double, late: Double = 0, cancelled: Bool = false) -> Departure {
+            let scheduled = now.addingTimeInterval(minutes * 60)
+            return Departure(id: "demo-\(minutes)", line: "Central", mode: .tube, lineColor: LineColors.color(line: "Central", mode: .tube),
+                             headsign: "Ealing Broadway", stopName: "Redbridge", stopCoordinate: Coordinate(latitude: 51.5763, longitude: 0.0454),
+                             scheduled: scheduled, expected: scheduled.addingTimeInterval(late * 60), isRealtime: true, isCancelled: cancelled)
+        }
+        let departures = [departure(4.9), departure(6.9, late: 2), departure(13.9, cancelled: true), departure(17.9)]
+        NextTrains.shared.start(NextTrains.Request(key: "demo", line: "Central", mode: .tube, color: departures[0].lineColor, stop: "Redbridge",
+                                                   towards: "Liverpool Street", follow: nil, departures: departures, refresh: nil))
+        var state = NextTrains.state(departures, live: true, now: now)
+        state.notice = "Severe delays"
+        for activity in Activity<NextTrainAttributes>.activities {
+            nonisolated(unsafe) let activity = activity
+            await activity.update(ActivityContent(state: state, staleDate: state.staleDate(after: now)))
+        }
+    }
 }
 #endif

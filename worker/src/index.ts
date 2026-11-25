@@ -3,6 +3,7 @@
 
 import { Hono, type Context } from "hono";
 import { bodyLimit } from "hono/body-limit";
+import { lookup, runActivities } from "./activities.ts";
 import { canPush, send } from "./apns.ts";
 import { emptyState, runChecks, tflRequests, type Env } from "./checks.ts";
 import { loadLineMaps } from "./linemap.ts";
@@ -11,6 +12,7 @@ import { issuesPush, lineList } from "./push.ts";
 import { activeWindows, during, eachWay, travelRanges } from "./schedule.ts";
 import { useLocalTfL } from "./tfl.ts";
 import { lineCatalog, lineChecks, stationChecks, TfLUnavailable, validateLines } from "./linechecks.ts";
+import { FOLLOWED_MODES } from "./trains.ts";
 import type { Alert, Issue } from "./types.ts";
 import * as valid from "./validate.ts";
 
@@ -138,6 +140,10 @@ app.put("/v1/devices/:token", async (c) => {
   const alerts = valid.alerts(body.alerts);
   if (!alerts.length) throw new valid.Invalid("A registration needs at least one scheduled alert");
   const environment = valid.environment(body.environment), timeZone = valid.timeZone(body.timeZone);
+  // The phone's push-to-start token, for saved lines that start a Live Activity themselves. One
+  // that isn't a token is left out, not a reason to refuse the alerts.
+  let startToken: string | null = null;
+  try { if (body.startToken != null) startToken = valid.deviceToken(String(body.startToken)); } catch {}
   validateLines(alerts, await lineCatalog({ key: c.env.TFL_APP_KEY, ops: tflRequests(c.env, 0) }));
   // The order of arrival is only kept for as long as removals are remembered: a request that has
   // been on its way longer than that (an upload that crawled) is asked to come again.
@@ -153,21 +159,21 @@ app.put("/v1/devices/:token", async (c) => {
   // not removed and added, so its place is kept on a full server; and only a registration older
   // than this request, so one sent before a newer token registered can't take its place late.
   await c.env.DB.prepare(
-    `UPDATE devices SET token = ?3, environment = ?6, time_zone = ?7, alerts = ?8, updated_at = ?4, revision = lower(hex(randomblob(16))), state = ${freshState}
+    `UPDATE devices SET token = ?3, environment = ?6, time_zone = ?7, alerts = ?8, start_token = ?9, updated_at = ?4, revision = lower(hex(randomblob(16))), state = ${freshState}
      WHERE enrollment_hash = ?1 AND secret_hash = ?2 AND token != ?3 AND updated_at < ?4
        AND NOT EXISTS (SELECT 1 FROM devices WHERE token = ?3)
        AND NOT EXISTS (SELECT 1 FROM meta WHERE key = ?5 AND updated_at >= ?4)`,
-  ).bind(enrollment, hash, token, arrived, removal, environment, timeZone, JSON.stringify(alerts)).run();
+  ).bind(enrollment, hash, token, arrived, removal, environment, timeZone, JSON.stringify(alerts), startToken).run();
   // One statement: a phone already stored is updated; a new one only while there's room, so
   // two registrations at once can't both take the last place. `updated_at` is when the request
   // arrived: an older change that finishes after a newer one changes nothing.
   const result = await c.env.DB.prepare(
-    `INSERT INTO devices (token, environment, time_zone, alerts, state, updated_at, secret_hash, revision, enrollment_hash)
-     SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, lower(hex(randomblob(16))), ?9
+    `INSERT INTO devices (token, environment, time_zone, alerts, state, updated_at, secret_hash, revision, enrollment_hash, start_token)
+     SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, lower(hex(randomblob(16))), ?9, ?11
      WHERE (EXISTS (SELECT 1 FROM devices WHERE token = ?1) OR (SELECT COUNT(*) FROM devices) < ?8)
        AND NOT EXISTS (SELECT 1 FROM meta WHERE key = ?10 AND updated_at >= ?6)
      ON CONFLICT(token) DO UPDATE SET environment = ?2, time_zone = ?3, alerts = ?4, updated_at = ?6, revision = excluded.revision,
-       state = ${freshState},
+       state = ${freshState}, start_token = ?11,
        -- The invitation used now is the one kept. A phone from before invitations keeps none
        -- when another phone already holds this one (they shared it, as phones then did).
        enrollment_hash = CASE WHEN EXISTS (SELECT 1 FROM devices AS other WHERE other.enrollment_hash = excluded.enrollment_hash AND other.token != excluded.token)
@@ -178,7 +184,7 @@ app.put("/v1/devices/:token", async (c) => {
        AND (devices.enrollment_hash IS NULL OR devices.enrollment_hash = excluded.enrollment_hash
          OR NOT EXISTS (SELECT 1 FROM devices AS other WHERE other.enrollment_hash = excluded.enrollment_hash AND other.token != excluded.token))
      ON CONFLICT(enrollment_hash) DO NOTHING`,
-  ).bind(token, environment, timeZone, JSON.stringify(alerts), JSON.stringify(emptyState()), arrived, hash, maxDevices(c.env), enrollment, removal).run();
+  ).bind(token, environment, timeZone, JSON.stringify(alerts), JSON.stringify(emptyState()), arrived, hash, maxDevices(c.env), enrollment, removal, startToken).run();
   if (!result.meta?.changes) {
     await rejectOtherOwner(c.env.DB, token, hash);
     if (await c.env.DB.prepare("SELECT 1 FROM meta WHERE key = ?1 AND updated_at >= ?2").bind(removal, arrived).first()) {
@@ -264,6 +270,48 @@ app.post("/v1/devices/:token/test", async (c) => {
   return c.json(result, result.status === 200 ? 200 : 502);
 });
 
+/** Live Activities one invitation's phone can have kept up to date at once; a new one takes the
+ * place of the oldest. */
+const MAX_ACTIVITIES = 4;
+
+/** A next-train Live Activity to keep up to date until it ends: what it follows, and what it
+ * should show now, so the phone needn't wait for the next minute's push. */
+app.put("/v1/activities/:token", async (c) => {
+  const token = valid.deviceToken(c.req.param("token"));
+  const hash = await ownerHash(c);
+  const enrollment = c.get("enrollmentHash");
+  const body = valid.body(await c.req.json().catch(() => ({})));
+  const now = Date.now();
+  const follow = valid.follow(body.follow);
+  const environment = valid.environment(body.environment);
+  const ends = valid.ends(body.ends, now);
+  if (!FOLLOWED_MODES.has(follow.mode)) throw new valid.Invalid("TfL has no live times for this line");
+  const tfl = { key: c.env.TFL_APP_KEY, ops: tflRequests(c.env, 0) };
+  validateLines([{ id: "live", name: "", days: [1], windows: [], minorDelays: true, segments: [follow] }], await lineCatalog(tfl));
+  const result = await c.env.DB.prepare(
+    `INSERT INTO activities (token, environment, follow, ends_at, state, updated_at, secret_hash, enrollment_hash)
+     VALUES (?1, ?2, ?3, ?4, '', ?5, ?6, ?7)
+     ON CONFLICT(token) DO UPDATE SET environment = ?2, follow = ?3, ends_at = ?4, updated_at = ?5
+     WHERE activities.secret_hash = excluded.secret_hash`,
+  ).bind(token, environment, JSON.stringify(follow), ends, now, hash, enrollment).run();
+  if (!result.meta?.changes) return c.json({ error: "This Live Activity is registered by another install of Beeline" }, 403);
+  await c.env.DB.prepare(
+    `DELETE FROM activities WHERE enrollment_hash = ?1 AND token NOT IN
+     (SELECT token FROM activities WHERE enrollment_hash = ?1 ORDER BY updated_at DESC, token LIMIT ?2)`,
+  ).bind(enrollment, MAX_ACTIVITIES).run();
+  const state = (await lookup(c.env, [follow], now, tfl))(follow);
+  if (state) await c.env.DB.prepare("UPDATE activities SET state = ?1 WHERE token = ?2 AND ends_at = ?3").bind(JSON.stringify(state), token, ends).run();
+  // Whether the server can push at all: without its push key the phone keeps it fresh itself.
+  return c.json({ ok: true, state: state ?? null, pushes: canPush(c.env) });
+});
+
+app.delete("/v1/activities/:token", async (c) => {
+  const token = valid.deviceToken(c.req.param("token"));
+  const hash = await ownerHash(c);
+  await c.env.DB.prepare("DELETE FROM activities WHERE token = ?1 AND secret_hash = ?2").bind(token, hash).run();
+  return c.json({ ok: true });
+});
+
 app.onError((error, c) => {
   if (error instanceof TooManyRequests) return c.json({ error: "Try again in a minute" }, 429, { "Retry-After": "60" });
   if (error instanceof TfLUnavailable) return c.json({ error: error.message }, 503);
@@ -343,9 +391,14 @@ async function sha256(text: string): Promise<string> {
 
 export default {
   fetch: (request: Request, env: Env, ctx: ExecutionContext) => (useLocalTfL(env.TFL_BASE), warnWithoutKey(env), app.fetch(request, env, ctx)),
-  async scheduled(_event: ScheduledController, env: Env, ctx: ExecutionContext) {
+  async scheduled(event: ScheduledController, env: Env, ctx: ExecutionContext) {
     useLocalTfL(env.TFL_BASE);
     warnWithoutKey(env);
+    // Next-train Live Activities have their own once-a-minute trigger, and invocation.
+    if (event.cron === "* * * * *") {
+      ctx.waitUntil(runActivities(env).then((r) => (r.sent || r.started || r.ended) && console.log("live", JSON.stringify(r))));
+      return;
+    }
     ctx.waitUntil(runChecks(env).then((r) => r.checked && console.log("checked", JSON.stringify(r))));
   },
 } satisfies ExportedHandler<Env>;

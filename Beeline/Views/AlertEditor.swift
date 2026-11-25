@@ -155,6 +155,20 @@ struct AlertEditor: View {
                 }
             }
 
+            if alert.canStartLiveActivity {
+                Section {
+                    Toggle("Next trains on Lock Screen", isOn: Binding {
+                        alert.liveActivity == true
+                    } set: { on in
+                        alert.liveActivity = on ? true : nil
+                    })
+                } footer: {
+                    Text(store.isConfigured
+                         ? "Comes on by itself at these times with live departures, and goes when each one ends."
+                         : "Comes on by itself at these times. Needs the alerts server.")
+                }
+            }
+
             Section {
                 DisclosureGroup("More options", isExpanded: $showsOptions) {
                     TextField("Alert name", text: $alert.name, prompt: Text(alert.defaultName))

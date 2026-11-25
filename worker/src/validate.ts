@@ -35,7 +35,7 @@ const list = <T>(v: unknown, max: number, what: string, each: (x: unknown) => T)
 
 const MODES = new Set(["tube", "dlr", "elizabeth-line", "overground", "tram", "national-rail"]);
 
-function segment(v: unknown): Segment {
+export function segment(v: unknown): Segment {
   const s = (v ?? {}) as Record<string, any>;
   const station = (x: unknown, what: string) => {
     const o = (x ?? {}) as Record<string, unknown>;
@@ -81,11 +81,26 @@ export function alerts(v: unknown): Alert[] {
       segments: list(a.segments, 8, "segments", segment),
       // Anything else, a newer build's word included, is both ways: when unsure, tell.
       direction: a.direction === "out" || a.direction === "back" ? a.direction : "both",
+      ...(a.liveActivity === true ? { liveActivity: true } : {}),
     };
   });
   if (result.some((a) => !a.segments.length || !a.days.length || !a.windows.length)) throw new Invalid("Each alert needs a line and scheduled travel times");
   if (new Set(result.flatMap((a) => a.segments.map((s) => s.line.id))).size > 48) throw new Invalid("An install can watch up to 48 distinct lines");
   return result;
+}
+
+/** What a Live Activity follows: a line from where you board to where you get off. */
+export function follow(v: unknown): Segment {
+  const s = segment(v);
+  if (!s.from || !s.to || s.from.id === s.to.id) throw new Invalid("A Live Activity needs the station you board at and the one you get off at");
+  return { line: s.line, mode: s.mode, from: s.from, to: s.to, stations: [] };
+}
+
+/** When a Live Activity ends (seconds since 1970): ahead, and at most eight hours, as long as
+ * iOS keeps one. */
+export function ends(v: unknown, now: number): number {
+  if (typeof v !== "number" || !Number.isFinite(v) || v * 1000 <= now) throw new Invalid("ends must be a time ahead, in seconds since 1970");
+  return Math.min(Math.round(v * 1000), now + 8 * 3600_000);
 }
 
 export function environment(v: unknown): Environment {
