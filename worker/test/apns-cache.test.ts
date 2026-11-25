@@ -11,6 +11,7 @@ test("APNs requests reuse a token without keeping a usable bearer in the devices
   const authorizations: string[] = [];
   const collapseIDs: string[] = [];
   t.mock.method(globalThis, "fetch", async (_url: string, init: RequestInit) => {
+    assert.equal(init.redirect, "manual");
     const headers = new Headers(init.headers);
     authorizations.push(headers.get("authorization")!);
     collapseIDs.push(headers.get("apns-collapse-id")!);

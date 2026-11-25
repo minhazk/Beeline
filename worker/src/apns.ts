@@ -40,7 +40,7 @@ export async function send(env: ApnsEnv, token: string, environment: Environment
   const { jwt, sealed } = await providerToken(env, now);
   const response = await fetch(`${HOSTS[environment]}/3/device/${token}`, {
     method: "POST",
-    redirect: "error",
+    redirect: "manual",
     headers: {
       authorization: `bearer ${jwt}`,
       "apns-topic": String(env.APNS_TOPIC),
