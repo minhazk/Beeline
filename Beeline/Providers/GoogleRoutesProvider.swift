@@ -60,7 +60,7 @@ struct GoogleRoutesProvider: JourneyProvider {
 
     static func parse(_ data: Data, query: JourneyQuery, variant: String) throws -> [Journey] {
         let response = try HTTP.decode(Response.self, from: data)
-        let journeys = (response.routes ?? []).compactMap { journey($0, query: query, variant: variant) }
+        let journeys = (response.routes ?? []).prefix(TransitousProvider.maxItineraries).compactMap { journey($0, query: query, variant: variant) }
         guard !journeys.isEmpty else { throw ProviderError.noRoutes }
         return journeys
     }
@@ -69,6 +69,8 @@ struct GoogleRoutesProvider: JourneyProvider {
     /// first ends as the first vehicle leaves, later ones start when you alight.
     private static func journey(_ route: Response.Route, query: JourneyQuery, variant: String) -> Journey? {
         let steps = route.legs?.flatMap { $0.steps ?? [] } ?? []
+        // A real route has a few dozen steps: one with hundreds isn't read at all.
+        guard steps.count <= 400 else { return nil }
         var legs: [Leg] = []
         var pendingWalk: (seconds: TimeInterval, meters: Double, path: [Coordinate])?
 
@@ -79,20 +81,25 @@ struct GoogleRoutesProvider: JourneyProvider {
             legs.append(Leg(
                 mode: .walk, fromName: legs.last?.toName ?? query.origin.name, toName: "",
                 departure: departure, arrival: departure.addingTimeInterval(walk.seconds),
-                distanceMeters: walk.meters, path: walk.path))
+                distanceMeters: walk.meters.plausibleMetres, path: walk.path))
         }
 
         for step in steps {
-            let points = step.polyline?.encodedPolyline.map { Polyline.decode($0) } ?? []
-            guard step.travelMode == "TRANSIT", let t = step.transitDetails,
-                  let dep = Time.iso(t.stopDetails?.departureTime), let arr = Time.iso(t.stopDetails?.arrivalTime) else {
+            guard step.travelMode == "TRANSIT" else {
                 var walk = pendingWalk ?? (0, 0, [])
+                // Only as much of a walk's path as is ever drawn is decoded or kept.
+                let room = Polyline.maxPoints - walk.path.count
+                let points = room > 0 ? (step.polyline?.encodedPolyline.map { Polyline.decode($0) } ?? []) : []
                 walk.seconds += seconds(step.staticDuration)
-                walk.meters += Double(step.distanceMeters ?? 0)
-                walk.path += points
+                walk.meters += step.distanceMeters.flatMap { Double($0).plausibleMetres } ?? 0
+                walk.path += points.prefix(max(0, room))
                 pendingWalk = walk
                 continue
             }
+            let points = step.polyline?.encodedPolyline.map { Polyline.decode($0) } ?? []
+            // A ride whose times can't be read isn't a walk: the route isn't one to show.
+            guard let t = step.transitDetails, let dep = Time.iso(t.stopDetails?.departureTime),
+                  let arr = Time.iso(t.stopDetails?.arrivalTime), arr >= dep else { return nil }
             let previousArrival = legs.last?.arrival
             flushWalk(endingAt: dep, startingAt: previousArrival)
             let fromName = t.stopDetails?.departureStop?.name ?? ""
@@ -110,13 +117,13 @@ struct GoogleRoutesProvider: JourneyProvider {
                 lineColor: LineColors.color(line: rawLine, mode: refined, providerHex: line?.color),
                 headsign: t.headsign, fromName: fromName, toName: t.stopDetails?.arrivalStop?.name ?? "",
                 departure: dep, arrival: arr, stopCount: t.stopCount,
-                distanceMeters: step.distanceMeters.map(Double.init), path: points))
+                distanceMeters: step.distanceMeters.flatMap { Double($0).plausibleMetres }, path: points))
         }
         let lastArrival = legs.last?.arrival
         flushWalk(endingAt: nil, startingAt: lastArrival ?? walkOnlyStart(route, query: query))
         if let last = legs.indices.last, legs[last].mode == .walk { legs[last].toName = query.destination.name }
 
-        guard let first = legs.first, let last = legs.last else { return nil }
+        guard let first = legs.first, let last = legs.last, legs.count <= TransitousProvider.maxLegs, Leg.inOrder(legs) else { return nil }
         return Journey(
             departure: first.departure, arrival: last.arrival, legs: legs,
             sources: [SourceTag(provider: .google, variant: variant)],
@@ -127,8 +134,12 @@ struct GoogleRoutesProvider: JourneyProvider {
         query.time.isArriveBy ? query.time.date.addingTimeInterval(-seconds(route.duration)) : query.time.date
     }
 
+    /// "540s" as seconds. "infs", "nans" and "1e30s" all read as numbers too: anything that isn't
+    /// a length of time within a day is none.
     static func seconds(_ duration: String?) -> TimeInterval {
-        TimeInterval(duration?.trimmingCharacters(in: CharacterSet(charactersIn: "s")) ?? "") ?? 0
+        guard let value = TimeInterval(duration?.trimmingCharacters(in: CharacterSet(charactersIn: "s")) ?? ""),
+              value.isFinite, (0...86_400).contains(value) else { return 0 }
+        return value
     }
 
     static func mode(_ vehicle: String?) -> LegMode {

@@ -1,6 +1,7 @@
 import Foundation
 import Security
 import Testing
+@preconcurrency import UserNotifications
 @testable import Beeline
 
 /// The alert store against a recorded transport and an in-memory Keychain: which server gets
@@ -27,12 +28,24 @@ struct AlertStoreTests {
     @MainActor final class Wire {
         var requests: [URLRequest] = []
         var failing: Set<String> = []
+        /// What a host answers instead of 200 and `reply`.
+        var refusing: [String: (status: Int, body: String)] = [:]
         var reply = Data(#"{"checkedAt":"2026-11-24T12:00:00Z","alerts":[]}"#.utf8)
         func send(_ request: URLRequest) throws -> (Data, URLResponse) {
             requests.append(request)
-            if failing.contains(request.url?.host() ?? "") { throw URLError(.cannotConnectToHost) }
-            return (reply, HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+            let host = request.url?.host() ?? ""
+            if failing.contains(host) { throw URLError(.cannotConnectToHost) }
+            if let refusal = refusing[host] {
+                return (Data(refusal.body.utf8), HTTPURLResponse(url: request.url!, statusCode: refusal.status, httpVersion: nil, headerFields: nil)!)
+            }
+            // What the server answers each route: a status to POST status, its agreement to the rest.
+            let isStatus = request.httpMethod == "POST" && request.url?.lastPathComponent == "status"
+            let isTest = request.httpMethod == "POST" && request.url?.lastPathComponent == "test"
+            let answer = isStatus ? reply : agreement ?? Data((isTest ? #"{"status":200,"gone":false}"# : #"{"ok":true,"pushes":true}"#).utf8)
+            return (answer, HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
         }
+        /// What a change or a test is answered with, when not the server's usual agreement.
+        var agreement: Data?
         func to(_ host: String) -> [URLRequest] { requests.filter { $0.url?.host() == host } }
     }
 
@@ -46,10 +59,11 @@ struct AlertStoreTests {
 
     func store(secrets: Secrets = Secrets(), wire: Wire = Wire(), registered: Bool = true,
                builtIn: (String, String)? = ("https://built.example.com", "built-token"),
-               defaults existingDefaults: UserDefaults? = nil) -> AlertStore {
+               defaults existingDefaults: UserDefaults? = nil, permission: Permission = Permission()) -> AlertStore {
         let name = "AlertStoreTests.\(UUID().uuidString)"
         let defaults = existingDefaults ?? UserDefaults(suiteName: name)!
         if defaults.object(forKey: "alerts") == nil {
+            defaults.set(true, forKey: "alerts.tracksHeld")
             defaults.set(try! JSONEncoder().encode([Self.validAlert()]), forKey: "alerts")
             defaults.set(Self.pushToken, forKey: "alerts.token")
             if registered { defaults.set(Self.pushToken, forKey: "alerts.registered") }
@@ -61,8 +75,182 @@ struct AlertStoreTests {
         deps.builtInToken = builtIn?.1
         deps.transport = { try await wire.send($0) }
         deps.registerForPush = { nil }
+        deps.notificationSettings = { (nil, permission.status) }
+        deps.requestPushToken = { permission.tokenRequests += 1 }
         deps.syncDelay = .zero
         return AlertStore(deps)
+    }
+
+    /// Whether Beeline may notify, as a test sets it; nil is not yet known.
+    @MainActor final class Permission {
+        var status: UNAuthorizationStatus?
+        var tokenRequests = 0
+        init(_ status: UNAuthorizationStatus? = nil) { self.status = status }
+    }
+
+    @Test func aPhoneThatMayNotBeNotifiedIsTakenOffTheServerAndPutBackWhenItMay() async throws {
+        let wire = Wire(), permission = Permission(.denied)
+        let store = store(wire: wire, permission: permission)
+        await store.refreshPermission()
+        await store.waitForSync()
+        #expect(wire.requests.map(\.httpMethod) == ["DELETE"], "what the server was told is taken back, and nothing is registered")
+        await store.refreshPermission()
+        store.didRegister(Data(repeating: 0xcd, count: 32))
+        await store.waitForSync()
+        #expect(wire.requests.count == 1, "nothing more while it stays off: not even a new token is sent")
+
+        // Turned back on in Settings: no relaunch needed.
+        permission.status = .authorized
+        await store.refreshPermission()
+        await store.waitForSync()
+        #expect(permission.tokenRequests == 1)
+        #expect(wire.requests.last?.httpMethod == "PUT")
+        #expect(wire.requests.last?.url?.lastPathComponent == String(repeating: "cd", count: 32))
+        await store.refreshPermission()
+        await store.waitForSync()
+        #expect(wire.requests.filter { $0.httpMethod == "PUT" }.count == 1, "registered: not sent again each time the app comes forward")
+    }
+
+    @Test func aPhoneNeverAskedIsNotRegisteredUntilItAgrees() async throws {
+        let wire = Wire(), permission = Permission(.notDetermined)
+        let store = store(wire: wire, registered: false, permission: permission)
+        store.resume()
+        await store.refreshPermission()
+        store.didRegister(Data(repeating: 0xab, count: 32))
+        await store.waitForSync()
+        #expect(wire.requests.isEmpty)
+        #expect(permission.tokenRequests == 0)
+    }
+
+    @Test func aRemovalStillOwedIsKeptWhenComingBackWithNotificationsOff() async throws {
+        let secrets = Secrets(), wire = Wire(), permission = Permission(.authorized)
+        let store = store(secrets: secrets, wire: wire, permission: permission)
+        wire.failing = ["built.example.com"]
+        _ = try await store.useServer(url: "https://mine.example.com", token: "mine-token")
+        await store.waitForSync()
+        permission.status = .denied
+        await store.refreshPermission()
+        await store.waitForSync()
+        wire.failing = []
+        wire.requests = []
+        _ = try await store.useServer(url: "", token: "")
+        await store.waitForSync()
+        #expect(wire.to("built.example.com").map(\.httpMethod).filter { $0 != "POST" } == ["DELETE"], "the built-in server still held this phone")
+        #expect(!wire.requests.contains { $0.httpMethod == "PUT" })
+    }
+
+    @Test func aNewPushTokenRegistersBeforeTheOldOneIsRemoved() async throws {
+        let wire = Wire()
+        let store = store(wire: wire)
+        store.didRegister(Data(repeating: 0xcd, count: 32))
+        await store.waitForSync()
+        let calls = wire.requests.map { "\($0.httpMethod ?? "") \(($0.url?.lastPathComponent ?? "").prefix(4))" }
+        #expect(calls == ["PUT cdcd", "DELETE abab"], "a refused registration leaves the old one in place, not none")
+
+        // An older server answers that the invitation has a phone: the old token makes room first.
+        let older = Wire()
+        older.refusing["built.example.com"] = (409, #"{"error":"This invitation already has a phone."}"#)
+        let second = self.store(wire: older)
+        second.didRegister(Data(repeating: 0xcd, count: 32))
+        await second.waitForSync()
+        #expect(older.requests.map(\.httpMethod).prefix(2) == ["PUT", "DELETE"])
+    }
+
+    @Test func aRegistrationWhoseAnswerNeverCameIsStillTakenBackWhenNotificationsGoOff() async throws {
+        let wire = Wire(), permission = Permission(.authorized)
+        let store = store(wire: wire, registered: false, permission: permission)
+        wire.failing = ["built.example.com"]
+        store.didRegister(Data(repeating: 0xab, count: 32))
+        await store.waitForSync()
+        wire.failing = []
+        wire.requests = []
+        permission.status = .denied
+        await store.refreshPermission()
+        await store.waitForSync()
+        #expect(wire.requests.map(\.httpMethod) == ["DELETE"], "the server may hold it, so it is asked to forget it")
+    }
+
+    @Test func aPageThatMerelySays200IsNotTheServerAgreeing() async throws {
+        let wire = Wire()
+        wire.agreement = Data("<html>Welcome to nginx</html>".utf8)
+        let store = store(wire: wire, registered: false)
+        store.didRegister(Data(repeating: 0xab, count: 32))
+        await store.waitForSync()
+        #expect(store.syncProblem != nil)
+        #expect(await store.sendTest().contains("isn't registered"), "not taken for registered")
+
+        wire.agreement = Data(#"{"ok":true,"pushes":false}"#.utf8)
+        store.didRegister(Data(repeating: 0xab, count: 32))
+        await store.waitForSync()
+        #expect(store.syncProblem?.contains("push key") == true, "registered, but the server can't send yet")
+    }
+
+    @Test func aRefusalThatSaysWhyRemovesNothingOfThisPhones() async throws {
+        let wire = Wire()
+        wire.refusing["built.example.com"] = (409, #"{"error":"This invitation already has a phone.","code":"invitation_taken"}"#)
+        let store = store(wire: wire)
+        store.didRegister(Data(repeating: 0xcd, count: 32))
+        await store.waitForSync()
+        #expect(wire.requests.map(\.httpMethod) == ["PUT"], "the registration it has stays")
+        #expect(store.syncProblem?.contains("already has a phone") == true)
+    }
+
+    @Test func tokensTheServerMayHoldAreAllTakenBackHoweverOftenTheTokenChanged() async throws {
+        let wire = Wire(), permission = Permission(.authorized)
+        let store = store(wire: wire, permission: permission)
+        // Registered with "ab"; "cd" and then "ef" are sent, and neither answer comes back.
+        wire.failing = ["built.example.com"]
+        store.didRegister(Data(repeating: 0xcd, count: 32))
+        await store.waitForSync()
+        store.didRegister(Data(repeating: 0xef, count: 32))
+        await store.waitForSync()
+        wire.failing = []
+        wire.requests = []
+        permission.status = .denied
+        await store.refreshPermission()
+        await store.waitForSync()
+        let removed = Set(wire.requests.filter { $0.httpMethod == "DELETE" }.map { String(($0.url?.lastPathComponent ?? "").prefix(2)) })
+        #expect(removed == ["ab", "cd", "ef"])
+        #expect(!wire.requests.contains { $0.httpMethod == "PUT" })
+    }
+
+    @Test func aRegistrationMadeWithAnotherServerIsNotThisOnesToHearAbout() async throws {
+        let defaults = UserDefaults(suiteName: "AlertStoreTests.\(UUID().uuidString)")!
+        let secrets = Secrets(), first = Wire()
+        let before = store(secrets: secrets, wire: first, registered: false, builtIn: ("https://old.example.com", "old-token"), defaults: defaults)
+        before.didRegister(Data(repeating: 0xab, count: 32))
+        await before.waitForSync()
+        #expect(first.to("old.example.com").map(\.httpMethod) == ["PUT"])
+        // The next release names another built-in server, and notifications have been turned off.
+        let second = Wire(), permission = Permission(.denied)
+        let after = store(secrets: secrets, wire: second, builtIn: ("https://new.example.com", "new-token"), defaults: defaults, permission: permission)
+        after.resume()
+        await after.refreshPermission()
+        await after.waitForSync()
+        #expect(second.to("new.example.com").isEmpty, "the new server is never sent a token it wasn't given")
+        // The old one is asked to forget the phone, with the invitation that was its own.
+        #expect(second.to("old.example.com").map(\.httpMethod) == ["DELETE"])
+        #expect(second.to("old.example.com").allSatisfy { $0.value(forHTTPHeaderField: "Authorization") == "Bearer old-token" })
+    }
+
+    @Test func onlyAnAnswerSettlesARemovalAndNeverAFailureToReach() async throws {
+        let wire = Wire()
+        wire.refusing["built.example.com"] = (401, #"{"error":"Not allowed"}"#)
+        let store = store(wire: wire)
+        let note = try await store.useServer(url: "https://mine.example.com", token: "mine-token")
+        #expect(note != nil, "an invitation it no longer takes may be a mistake put right later")
+        wire.refusing = [:]
+        wire.failing = ["built.example.com"]
+        store.resume()
+        await store.waitForSync()
+        wire.failing = []
+        wire.refusing["built.example.com"] = (403, #"{"error":"This phone is registered by another install of Beeline"}"#)
+        store.resume()
+        await store.waitForSync()
+        let asked = wire.to("built.example.com").count
+        store.resume()
+        await store.waitForSync()
+        #expect(wire.to("built.example.com").count == asked, "another install's: nothing of this phone's is left there")
     }
 
     @Test func aTokenOnlyGoesToItsOwnAddress() async throws {
@@ -342,6 +530,40 @@ struct AlertStoreTests {
         let server = try #require(store.server)
         #expect(server.url.absoluteString == "https://built.example.com")
         #expect(try store.deviceSecret(for: server) == legacy)
+    }
+
+    @Test func aFormerServerThatNoLongerKnowsThisPhoneIsNotAskedAgain() async throws {
+        let wire = Wire()
+        wire.refusing["built.example.com"] = (404, "Not found")
+        let store = store(wire: wire)
+        let note = try await store.useServer(url: "https://mine.example.com", token: "mine-token")
+        #expect(note == nil, "nothing of this phone's is left there to remove")
+        await store.waitForSync()
+        store.resume()
+        await store.waitForSync()
+        #expect(wire.to("built.example.com").map(\.httpMethod) == ["DELETE"], "its credentials aren't sent there at every launch")
+    }
+
+    @Test func aReplyThatEchoesThisPhonesCredentialsIsNotShown() async throws {
+        let wire = Wire()
+        let store = store(wire: wire)
+        let server = try #require(store.server)
+        func said(_ body: String, path: String = "status") async throws -> String {
+            wire.refusing["built.example.com"] = (400, body)
+            do {
+                try await store.send("POST", path: path, to: server)
+            } catch AlertStore.AlertError.server(let message, let status) {
+                #expect(status == 400)
+                return message
+            }
+            Issue.record("the refusal should have thrown")
+            return ""
+        }
+        #expect(try await said(#"{"error":"Try again in a minute"}"#) == "Try again in a minute")
+        #expect(try await said(#"{"error":"bad header Authorization: Bearer built-token"}"#) == "The alert server said 400.")
+        let secret = try store.deviceSecret(for: server)
+        #expect(try await said(#"{"error":"x-device-secret was \#(secret)"}"#, path: "devices/\(Self.pushToken)/test") == "The alert server said 400.")
+        #expect(try await said(#"{"error":"no device \#(Self.pushToken)"}"#, path: "devices/\(Self.pushToken)/test") == "The alert server said 400.")
     }
 
     @Test func anOversizedReplyIsRefused() async throws {

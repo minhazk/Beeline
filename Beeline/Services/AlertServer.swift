@@ -37,7 +37,7 @@ struct AlertServer: Codable, Equatable, Sendable {
         if parts.user != nil || parts.password != nil { throw .hasCredentials }
         switch scheme {
         case "https": break
-        case "http" where ["localhost", "127.0.0.1", "::1", "[::1]"].contains(host): break
+        case "http" where allowsLocalHTTP && ["localhost", "127.0.0.1", "::1", "[::1]"].contains(host): break
         case "http": throw .notHTTPS
         default: throw .notAnAddress
         }
@@ -48,6 +48,17 @@ struct AlertServer: Codable, Equatable, Sendable {
         if parts.port == (scheme == "https" ? 443 : 80) { parts.port = nil }
         guard let url = parts.url else { throw .notAnAddress }
         return url
+    }
+
+    /// Plain http reaches only a server on the same machine. On a phone that is the phone itself,
+    /// where whatever listens would be handed the invitation, the device secret and the push
+    /// token: so only in development builds and the simulator, where it is the Mac.
+    static var allowsLocalHTTP: Bool {
+        #if DEBUG || targetEnvironment(simulator)
+        true
+        #else
+        false
+        #endif
     }
 
     /// The server to use: one entered in Settings when there is one, else the built-in one.

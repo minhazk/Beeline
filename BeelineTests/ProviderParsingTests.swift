@@ -25,6 +25,36 @@ struct ProviderParsingTests {
         #expect((51.4...51.6).contains(point.latitude) && (-0.3...0.1).contains(point.longitude))
     }
 
+    @MainActor @Test func numbersThatAreNoLengthOrPlaceAreDropped() {
+        #expect(GoogleRoutesProvider.seconds("540s") == 540)
+        for bad in ["infs", "nans", "1e30s", "-5s", "inf", nil] as [String?] { #expect(GoogleRoutesProvider.seconds(bad) == 0) }
+        #expect(TimeInterval.infinity.minutesText == "0 min")
+        #expect(TimeInterval.nan.signedMinutesText == "same time")
+        #expect((1e300 as TimeInterval).wholeMinutes == 0)
+        #expect((90 as TimeInterval).wholeMinutes == 2)
+        #expect(Coordinate.checked(latitude: 1e308, longitude: 0) == nil)
+        #expect(Coordinate.checked(latitude: 51.5, longitude: 181) == nil)
+        #expect(Coordinate.checked(latitude: 51.5, longitude: -0.12) != nil)
+        #expect((-1.0).plausibleMetres == nil && (1e308).plausibleMetres == nil && (250.0).plausibleMetres == 250)
+        for metres in [-Double.greatestFiniteMagnitude, -5e18, .nan, .infinity] { #expect(LiveTrip.distanceText(metres) == "") }
+        #expect(LiveTrip.distanceText(254) == "250 m")
+        #expect(TfLBuses.lineID("N25") == "n25")
+        #expect(TfLBuses.lineID("٣") == nil && TfLBuses.lineID("Ⅱ") == nil)
+    }
+
+    @Test func aRouteWithNoReadableLegsIsNoRoute() {
+        let json = #"{"itineraries":[{"startTime":"2026-11-24T12:00:00Z","endTime":"2026-11-24T12:30:00Z","legs":[{"mode":"WALK","from":{"name":"A"},"to":{"name":"B"},"startTime":"never","endTime":"never"}]}]}"#
+        #expect(throws: ProviderError.noRoutes) { try TransitousProvider.parse(Data(json.utf8)) }
+    }
+
+    @Test func handoffsUseOnlyThePublishersOwnHTTPSLinks() {
+        for app in OpenIn.allCases {
+            let url = app.url(.londonExample)
+            #expect(url.scheme == "https")
+            #expect(["citymapper.com", "www.google.com", "maps.apple.com"].contains(url.host() ?? ""))
+        }
+    }
+
     @Test func tfl() throws {
         let journeys = try TfLProvider.parse(Self.fixture("tfl-journeys"), variant: "Fastest")
         let first = try #require(journeys.first)

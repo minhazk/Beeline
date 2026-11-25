@@ -22,6 +22,9 @@ export interface Sent {
   reason?: string;
   /** The token is dead (app deleted, notifications reset): forget the phone. */
   gone: boolean;
+  /** With `gone`: when Apple last found it so (ms), if it says. A phone registered after that
+   * has a token Apple hadn't yet looked at again. */
+  goneSince?: number;
 }
 
 const HOSTS: Record<Environment, string> = {
@@ -36,15 +39,25 @@ async function collapseHeader(id: string): Promise<string> {
   return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
-export async function send(env: ApnsEnv, token: string, environment: Environment, push: Push, now = Date.now()): Promise<Sent> {
-  const { jwt, sealed } = await providerToken(env, now);
+/** One run's provider token, so a run of many pushes reads D1 for it once. */
+export interface TokenMemo { token?: { jwt: string; sealed: string } }
+
+/** The push key, its ID, the team or the topic can't make a provider token: the server's own
+ * setup, not Apple or the network, so nothing that waits on it is given up on. */
+export class PushSetupError extends Error {}
+
+export async function send(env: ApnsEnv, token: string, environment: Environment, push: Push, now = Date.now(), memo?: TokenMemo): Promise<Sent> {
+  const { jwt, sealed } = memo?.token ?? await providerToken(env, now).catch((error) => { throw new PushSetupError(String(error)); });
+  if (memo) memo.token = { jwt, sealed };
   const response = await fetch(`${HOSTS[environment]}/3/device/${token}`, {
     method: "POST",
     redirect: "manual",
+    // One stuck connection must not hold up every other phone's alerts.
+    signal: AbortSignal.timeout(10_000),
     headers: {
       authorization: `bearer ${jwt}`,
       "apns-topic": String(env.APNS_TOPIC),
-      "apns-push-type": "alert",
+      "apns-push-type": push.type ?? "alert",
       "apns-priority": String(push.priority),
       "apns-collapse-id": await collapseHeader(push.collapseId),
       "apns-expiration": String(push.expiration),
@@ -53,12 +66,17 @@ export async function send(env: ApnsEnv, token: string, environment: Environment
     body: JSON.stringify(push.payload),
   });
   if (response.ok) return { status: response.status, gone: false };
-  const reason = ((await response.json().catch(() => ({}))) as { reason?: string }).reason;
+  const answer = (await response.json().catch(() => ({}))) as { reason?: string; timestamp?: unknown };
+  const reason = typeof answer.reason === "string" ? answer.reason : undefined;
   if (reason === "ExpiredProviderToken" || reason === "InvalidProviderToken") {
+    if (memo) memo.token = undefined;
     await env.DB.prepare("DELETE FROM meta WHERE key = 'apns_jwt' AND value = ?1").bind(sealed).run();
   }
-  const gone = response.status === 410 && reason === "Unregistered";
-  return { status: response.status, reason, gone };
+  // 410 is Apple saying the token is no longer one to send to, whichever reason it gives
+  // ("Unregistered", "ExpiredToken"): not one to tell again, or to keep a place for.
+  const gone = response.status === 410;
+  const goneSince = gone && typeof answer.timestamp === "number" && Number.isFinite(answer.timestamp) ? answer.timestamp : undefined;
+  return { status: response.status, reason, gone, goneSince };
 }
 
 async function providerToken(env: ApnsEnv, now: number): Promise<{ jwt: string; sealed: string }> {
@@ -72,24 +90,36 @@ async function providerToken(env: ApnsEnv, now: number): Promise<{ jwt: string; 
     material, { name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"],
   );
   const cached = await env.DB.prepare("SELECT value, updated_at FROM meta WHERE key = 'apns_jwt'").first<{ value: string; updated_at: number }>();
-  if (cached?.value.startsWith("v1:") && cached.updated_at <= now && now - cached.updated_at < 50 * 60_000) {
+  type Cached = { value: string; updated_at: number } | null;
+  const open = async (entry: Cached) => {
+    // A run that began before another sender published its token still uses that one.
+    if (!entry?.value.startsWith("v1:") || entry.updated_at > now + 10 * 60_000 || now - entry.updated_at >= 50 * 60_000) return undefined;
     try {
-      const bytes = fromBase64(cached.value.slice(3));
+      const bytes = fromBase64(entry.value.slice(3));
       const plaintext = await crypto.subtle.decrypt({ name: "AES-GCM", iv: bytes.subarray(0, 12),
-        additionalData: encoder.encode(String(cached.updated_at)) }, key, bytes.subarray(12));
-      return { jwt: new TextDecoder().decode(plaintext), sealed: cached.value };
+        additionalData: encoder.encode(String(entry.updated_at)) }, key, bytes.subarray(12));
+      return { jwt: new TextDecoder().decode(plaintext), sealed: entry.value };
     } catch {
       // A rotated signing key or an unreadable entry requires a new provider token.
+      return undefined;
     }
-  }
+  };
+  const reused = await open(cached);
+  if (reused) return reused;
   // An all-digit team ID or key ID written unquoted in wrangler's vars arrives as a number.
   const jwt = await sign(String(env.APNS_KEY), String(env.APNS_KEY_ID), String(env.APNS_TEAM_ID), now);
   const iv = crypto.getRandomValues(new Uint8Array(12));
   const ciphertext = await crypto.subtle.encrypt({ name: "AES-GCM", iv, additionalData: encoder.encode(String(now)) },
     key, encoder.encode(jwt));
   const sealed = "v1:" + btoa(String.fromCharCode(...iv, ...new Uint8Array(ciphertext)));
-  await env.DB.prepare("INSERT INTO meta (key, value, updated_at) VALUES ('apns_jwt', ?1, ?2) ON CONFLICT(key) DO UPDATE SET value = ?1, updated_at = ?2")
-    .bind(sealed, now).run();
+  // Only over the entry this was decided from: two senders finding it stale at once must end up
+  // with one token between them, since APNs refuses provider tokens that change too often.
+  const written = await env.DB.prepare("INSERT INTO meta (key, value, updated_at) VALUES ('apns_jwt', ?1, ?2) ON CONFLICT(key) DO UPDATE SET value = ?1, updated_at = ?2 WHERE meta.value = ?3")
+    .bind(sealed, now, cached?.value ?? "").run();
+  if (!written.meta?.changes) {
+    const winner = await open(await env.DB.prepare("SELECT value, updated_at FROM meta WHERE key = 'apns_jwt'").first<{ value: string; updated_at: number }>());
+    if (winner) return winner;
+  }
   return { jwt, sealed };
 }
 

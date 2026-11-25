@@ -4,6 +4,9 @@ import type { Alert, Environment, Segment, TimeWindow } from "./types.ts";
 
 export class Invalid extends Error {}
 
+/** A name every object already answers to, so never the key of something kept by id. */
+export const reserved = (key: string) => key in {};
+
 const str = (v: unknown, max: number, what: string): string => {
   if (typeof v !== "string" || !v.length || v.length > max) throw new Invalid(`${what} must be text up to ${max} characters`);
   return v;
@@ -13,6 +16,8 @@ const id = (v: unknown, what: string) => {
   const s = str(v, 64, what);
   // Line ids go into TfL URL paths: dots alone ("..") would climb out of /Line/.
   if (!/^[A-Za-z0-9._-]+$/.test(s) || /^\.+$/.test(s)) throw new Invalid(`${what} has unexpected characters`);
+  // Ids key what each phone has been told: "constructor" or "__proto__" would read as something there.
+  if (reserved(s)) throw new Invalid(`${what} is a reserved word`);
   return s;
 };
 
@@ -91,11 +96,16 @@ export function environment(v: unknown): Environment {
 export function timeZone(v: unknown): string {
   const zone = str(v, 64, "timeZone");
   try {
-    new Intl.DateTimeFormat("en-GB", { timeZone: zone });
+    // One spelling per zone ("europe/LONDON" is Europe/London): what's stored, and what keys caches.
+    return new Intl.DateTimeFormat("en-GB", { timeZone: zone }).resolvedOptions().timeZone;
   } catch {
-    throw new Invalid(`unknown time zone ${zone}`);
+    throw new Invalid("unknown time zone");
   }
-  return zone;
+}
+
+/** A request body is an object or it is nothing: `null`, a list or a number carries no fields. */
+export function body(v: unknown): Record<string, unknown> {
+  return v !== null && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : {};
 }
 
 /** Each install's own secret (X-Device-Secret): random, generated on the phone. */

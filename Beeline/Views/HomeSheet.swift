@@ -9,6 +9,7 @@ struct HomeSheet: View {
     @Environment(Router.self) private var router
     @Environment(MapScene.self) private var scene
     @Environment(AlertStore.self) private var alerts
+    @Environment(AppSettings.self) private var settings
 
     @State private var picking: Picking?
     @State private var showSettings = false
@@ -41,7 +42,7 @@ struct HomeSheet: View {
                 searchRow
                 savedPlaces
                 yourLines
-                nearby
+                if offersNearby { nearby }
                 if places.recents.isEmpty { exampleJourney } else { recents }
                 if offersSetup {
                     Button("Set up extras", systemImage: "key.fill") { showSetup = true }
@@ -349,8 +350,12 @@ struct HomeSheet: View {
         }
     }
 
+    /// What's leaving nearby is Transitous's to answer, with where you are: with that source
+    /// turned off in Settings it isn't asked, here or for a journey's boards (`DepartureStore`).
+    private var offersNearby: Bool { settings.isEnabled(.transitous) }
+
     private var nearbyIsVisible: Bool {
-        scenePhase == .active && location.isAuthorized && router.path.isEmpty &&
+        offersNearby && scenePhase == .active && location.isAuthorized && router.path.isEmpty &&
             picking == nil && !showSetup && !showSettings && !alerts.showAlerts
     }
 

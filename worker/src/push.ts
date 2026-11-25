@@ -9,7 +9,12 @@ export interface Push {
   collapseId: string;
   /** Seconds since 1970 after which APNs stops trying. */
   expiration: number;
+  /** "background" shows nothing on the phone: it only asks Apple whether the token still lives. */
+  type?: "alert" | "background";
 }
+
+/** Nothing the phone shows or keeps: Apple's answer says whether the app is still installed. */
+export const probePush = (): Push => ({ payload: { aps: { "content-available": 1 } }, priority: 5, collapseId: "still-here", expiration: 0, type: "background" });
 
 const RELEVANCE = { closed: 1, delays: 0.8, minor: 0.4 } as const;
 // With control characters cleaned below, JSON needs at most three UTF-8 bytes per
