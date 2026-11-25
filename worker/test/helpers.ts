@@ -44,7 +44,7 @@ export function sqliteD1() {
     get size() { return Number((db.prepare("SELECT COUNT(*) AS n FROM devices").get() as { n: number }).n); },
     set: (token: string, row: Record<string, any>) => db.prepare(
       "INSERT INTO devices (token, environment, time_zone, alerts, state, updated_at, secret_hash) VALUES (?, ?, ?, ?, ?, ?, ?)",
-    ).run(token, row.environment, row.time_zone, row.alerts, row.state ?? "{}", row.updated_at ?? 0, row.secret_hash ?? null),
+    ).run(token, row.environment, row.time_zone, row.alerts, row.state ?? "{}", row.updated_at ?? RECORDED_AT, row.secret_hash ?? null),
   };
   return { prepare: statement, rows };
 }

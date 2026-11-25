@@ -40,9 +40,13 @@ struct TfLProvider: JourneyProvider {
     static func parse(_ data: Data, variant: String) throws -> [Journey] {
         let response = try HTTP.decode(Response.self, from: data)
         guard let journeys = response.journeys, !journeys.isEmpty else { throw ProviderError.noRoutes }
-        return journeys.compactMap { j in
-            guard let start = Time.londonLocal(j.startDateTime), let end = Time.londonLocal(j.arrivalDateTime) else { return nil }
+        return journeys.prefix(TransitousProvider.maxItineraries).compactMap { j in
+            guard let start = Time.londonLocal(j.startDateTime), let end = Time.londonLocal(j.arrivalDateTime),
+                  end >= start, j.legs.count <= TransitousProvider.maxLegs else { return nil }
             let legs = j.legs.compactMap(leg)
+            // All of it or none: a route missing a leg that couldn't be read would be shown, and
+            // followed in Go, as if that change weren't there.
+            guard !legs.isEmpty, legs.count == j.legs.count, Leg.inOrder(legs) else { return nil }
             return Journey(
                 departure: start, arrival: end, legs: legs,
                 sources: [SourceTag(provider: .tfl, variant: variant)],
@@ -52,7 +56,7 @@ struct TfLProvider: JourneyProvider {
     }
 
     private static func leg(_ l: Response.Leg) -> Leg? {
-        guard let dep = Time.londonLocal(l.departureTime), let arr = Time.londonLocal(l.arrivalTime) else { return nil }
+        guard let dep = Time.londonLocal(l.departureTime), let arr = Time.londonLocal(l.arrivalTime), arr >= dep else { return nil }
         let option = l.routeOptions?.first
         let lineID = option?.lineIdentifier?.id
         var mode = mode(l.mode?.id)
@@ -69,8 +73,8 @@ struct TfLProvider: JourneyProvider {
             toName: cleanName(l.arrivalPoint?.commonName),
             departure: dep, arrival: arr,
             stopCount: mode.isTransit ? l.path?.stopPoints?.count : nil,
-            distanceMeters: l.distance,
-            path: path.compactMap { $0.count == 2 ? Coordinate(latitude: $0[0], longitude: $0[1]) : nil },
+            distanceMeters: l.distance.flatMap(\.plausibleMetres),
+            path: path.prefix(Polyline.maxPoints).compactMap { $0.count == 2 ? Coordinate.checked(latitude: $0[0], longitude: $0[1]) : nil },
             isRealtime: realtime,
             platform: l.departurePoint?.platformName.flatMap { $0.isEmpty ? nil : $0 },
             // stopPoints ends with the alighting stop.

@@ -86,6 +86,7 @@ struct PlaceSearchView: View {
             search.bias(to: location.last)
             focused = true
         }
+        .onChange(of: location.isAuthorized) { _, authorized in if !authorized { search.bias(to: nil) } }
     }
 
     // MARK: Venues
@@ -256,7 +257,9 @@ struct PlaceSearchView: View {
             resolving = true
             let here = try? await location.current()
             resolving = false
-            pick(.currentLocation(here ?? location.last ?? .init(latitude: 0, longitude: 0)))
+            // No fix, and none from before (location is off): nowhere to plan from.
+            guard let coordinate = here ?? location.last else { return }
+            pick(.currentLocation(coordinate))
         }
     }
 

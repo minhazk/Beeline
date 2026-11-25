@@ -26,7 +26,7 @@ have data.
 | Citymapper, Google Maps, Apple Maps apps | One-tap hand-off with the same trip filled in | None |
 
 Citymapper and Waze have no usable API (Citymapper closed theirs in June 2023;
-Waze has no transit), so Citymapper is a deep link.
+Waze has no transit), so Citymapper is a link to its own site, which opens its app when it's installed.
 
 **Search more route options** (on by default) asks Google five ways (fastest, fewer changes,
 less walking, rail only, bus only) and TfL three ways. Most "blind spots" are
@@ -162,9 +162,11 @@ behind availability checks. Generate the Xcode project from the checked-in proje
 anything you set there wins. In an xcconfig `//` starts a comment: write URLs as
 `https:/$()/host`.
 
-`scripts/testflight.sh` archives and uploads to App Store Connect. It is for shipping to
-your own account (it needs your bundle ID, team and an app record there); building for
-yourself doesn't need it.
+`scripts/testflight.sh --upload` archives and uploads to App Store Connect (`--no-upload`
+exports the `.ipa` only). It is for shipping to your own account (it needs your bundle ID, team
+and an app record there); building for yourself doesn't need it. It ships what is committed, and
+refuses a build with a Google key, TfL key or alerts invitation compiled in unless you add
+`--embed-keys`.
 
 ### Keys
 
@@ -191,7 +193,8 @@ You need a Cloudflare account, Node 24 or later with pnpm, and, for the pushes t
 paid Apple Developer Program membership: only that can make the APNs key that lets your server
 send notifications to your build of the app, and sign the app with the push entitlement.
 
-1. `cd worker && pnpm install`, then `pnpm exec wrangler login`.
+1. `cd worker && pnpm install --frozen-lockfile` (the pnpm version is pinned in `package.json`), then
+   `pnpm exec wrangler login`.
 2. Create the database: `pnpm exec wrangler d1 create beeline-alerts`. Copy
    `wrangler.local.example.jsonc` to `wrangler.local.jsonc` (git-ignored) and put the printed
    `database_id` in it. `pnpm run deploy` and `pnpm run migrate` lay that file over
@@ -202,28 +205,59 @@ send notifications to your build of the app, and sign the app with the push enti
 4. `pnpm run migrate` creates the tables.
 5. Make an APNs key: developer.apple.com, Certificates, Identifiers & Profiles, Keys, a new
    key with Apple Push Notifications service (Sandbox & Production). Download the `.p8` once.
-6. Set the secrets:
+6. Set the secrets, through the same wrapper as the deploy so they go to the Worker your
+   `wrangler.local.jsonc` names (a bare `wrangler secret put` reads only `wrangler.jsonc`):
    ```sh
-   openssl rand -hex 32                                              # generate one invitation for each phone
-   pnpm exec wrangler secret put APP_TOKEN                           # one invitation per line
-   pnpm exec wrangler secret put APNS_KEY < AuthKey_ABC123DEFG.p8    # the whole key file, read from stdin
-   pnpm exec wrangler secret put APNS_KEY_ID                         # the key's 10-character ID
-   pnpm exec wrangler secret put TFL_APP_KEY                         # optional
+   openssl rand -hex 32 >> invitations.txt                          # one invitation for each phone, one per line
+   pnpm run wrangler secret put APP_TOKEN < invitations.txt         # the whole list, read from stdin
+   pnpm run wrangler secret put APNS_KEY < AuthKey_ABC123DEFG.p8    # the whole key file, read from stdin
+   pnpm run wrangler secret put APNS_KEY_ID                         # the key's 10-character ID
+   pnpm run wrangler secret put TFL_APP_KEY                         # free from api-portal.tfl.gov.uk
    ```
-7. `pnpm run deploy`. Check `https://<your worker>/health` says `{"ok":true,"pushes":true}`;
+   These are secrets, never `vars`: a var is plain text in the dashboard and the config, and
+   the wrapper refuses to deploy one. Keep invitations long and random, as above; nothing
+   slows down guessing a short one. Setting `APP_TOKEN` replaces the whole list, and typed at
+   wrangler's prompt it takes one line only, so keep the list in a file outside the repository
+   and send all of it each time.
+   The TfL key is needed: Cloudflare's addresses are shared, and TfL answers keyless requests
+   from them with 429 (rate limited), so without one line checks fail.
+7. `pnpm run deploy`. Check `https://<your worker>/health` says `{"ok":true,"pushes":true,"tflKey":true}`;
    `"pushes":false` means one of `APNS_KEY`, `APNS_KEY_ID`, `APNS_TEAM_ID` or `APNS_TOPIC` is
    missing, and until it's set the cron judges nothing, so no disruption is lost.
+   `"tflKey":false` means `TFL_APP_KEY` isn't set.
 8. Open Line alerts → Connect alerts server in a build without a configured service. Enter the server address and **that phone’s invitation**,
    then tap Use this server. Under Line alerts, save an alert, allow notifications, and choose Send a test notification.
+
+Each invitation admits one phone at a time. Each install also sends a random device secret so
+only its owner can change, test or remove the registration; the same install with a new push
+token (after a reinstall, or a restore to a new phone) takes over its own registration; restore
+to a second phone and keep using the first, and alerts go to whichever was opened last. Taking
+an invitation out of `APP_TOKEN` refuses its phone's requests at once and removes the phone it
+admitted a day later (a line left out by mistake can be put back within the day; an `APP_TOKEN`
+with nothing in it is every invitation taken out). Phones
+registered before invitations were recorded aren't tied to one: remove those in D1. Run the
+database migrations before updating the Worker: `0005` removes registrations from before device
+secrets, which no phone could change or remove (their phones register again when next opened).
 
 Next-train Live Activities use the same APNs key (Apple sends them on the app's
 `.push-type.liveactivity` topic). The Worker updates them from a second, once-a-minute cron that
 reads D1 and stops when none is showing; each invitation's phone can have four followed at once.
-
-Each invitation admits one new phone at a time. Existing installations from earlier versions
-retain their registrations. Each install also sends a random device secret so only its owner can
-change, test or remove the registration. Run the database migrations before updating the Worker.
+Migration `0006` adds their table.
 `MAX_DEVICES` (a var, default 100; `0` takes no new phones) caps how many phones it keeps.
+`MAX_PUSHES_PER_RUN` (a var, default 12) is the most notifications one two-minute check sends;
+the rest go at the next. Twelve fits the Workers Free plan's 50 requests and 50 database queries
+an invocation (a run counts its queries and stops short of them); on Workers Paid it can be
+raised, up to 250, which also lifts the query allowance a run keeps to. The Free plan suits a
+handful of phones whose owners you trust: every request is a database write, and D1's daily
+allowance on Free is shared by them all.
+
+What the server keeps for a phone is its push token, the lines, stations and times of its
+alerts, and its time zone. It goes when you remove the last alert, change server, or turn
+notifications off for Beeline (the next time the app is in front), and when Apple says the app
+has gone from the phone: a phone not
+heard from in a month is asked after with a push that shows nothing, so a deleted app's
+registration doesn't stay. A push token Apple keeps refusing is asked ever less often, then
+forgotten.
 
 Nothing changes until you tap Use this server (or finish the setup step with an address and
 token filled in); leaving Settings with a half-typed server keeps the one in use. Changing
@@ -233,15 +267,17 @@ gets its own device secret and the token entered with it, never the built-in one
 of one server's is sent to another. If the former server is unreachable, Settings reports the failure
 and the phone retries the removal on a later launch.
 
-The alerts worker checks line and mode selections against TfL's rail catalog. Each enrollment can request up to 12 registrations, status refreshes or notification tests per minute at a Cloudflare location. The scheduler uses separate batches for each mode and retries incomplete results at the next check.
+The alerts worker checks line and mode selections against TfL's rail catalog. Every request an invitation makes is counted before anything is read or looked up: up to 12 a minute at a Cloudflare location, 30 a minute everywhere together, and 1,500 a day (12,000 a day for all invitations together). A request refused for any of these writes nothing. The scheduler uses separate batches for each mode and retries incomplete results at the next check. A status refresh answers for the alerts TfL could check and lists the rest as `unchecked`, with no verdict; planned works it couldn't get are marked `upcomingUnknown`. Only when no alert could be checked does it fail (503).
 
 Development: `pnpm test` runs offline against the recorded TfL responses in
 `BeelineTests/Fixtures`, which the app's tests share (`alert-contract.json` is the JSON the
 app sends), and `pnpm exec tsc --noEmit` type-checks. To run it locally, put `APP_TOKEN=`
 some test value in `.dev.vars` (see `.dev.vars.example`), `pnpm run migrate:local`, then
 `pnpm run dev`; the simulator reaches it at `http://localhost:8787` (plain http is accepted
-for localhost only). To use recorded TfL answers instead of TfL, serve them over HTTP and add
-`--var TFL_BASE:http://127.0.0.1:<port>`. Without `APNS_KEY` it decides pushes but can't send.
+for localhost only, and only in debug builds and the simulator). To use recorded TfL answers
+instead of TfL, serve them over HTTP and add `--var TFL_BASE:http://127.0.0.1:<port>`: only an
+address on this machine is accepted, `TFL_APP_KEY` is never sent to it, and a deploy with it set
+is refused. Without `APNS_KEY` it decides pushes but can't send.
 
 ## Being a good client
 
@@ -273,10 +309,25 @@ keeps to these limits, and changes should too:
   small proxy instead.
 - `APP_TOKEN` holds one random invitation per line. Distribute each invitation privately to one
   phone. A recipient can request status before enabling push and admit one new registration.
-  To replace an invitation, update the Worker secret and the affected phone. Credentials
-  compiled into a distributed IPA are readable by its recipients, so enter invitations in Settings.
-- Keys and tokens entered in the app stay in the Keychain on that phone and go only to their
-  own service. Alert requests refuse redirects and plain http (except localhost).
+  To replace an invitation, update the Worker secret and the affected phone (Line alerts →
+  Alerts server). Credentials compiled into a distributed IPA are readable by its recipients, so
+  enter invitations in Settings; `scripts/testflight.sh` refuses a build with a key or invitation
+  compiled in unless you pass `--embed-keys`.
+- An invitation holder who also knows another phone's push token could register it first. The
+  token is known only to that phone, Apple and the servers it registered with, so give
+  invitations only to people you'd trust with that.
+- Keys and tokens entered in the app are kept in the Keychain (not synced through iCloud
+  Keychain; like other app data they are part of an encrypted backup of the phone and move with
+  it to a new one) and go only to their own service. Alert requests refuse redirects and plain
+  http (except localhost, in debug builds and the simulator). Replies are size-limited, and a
+  server's error text isn't shown when it repeats this phone's credentials.
+- Home, Work, favourites, recents and your alerts are kept in the app's preferences on the
+  phone, so they are part of its backups. Go's Live Activity and trip notifications show the
+  destination and next stop on the Lock Screen; trip notifications are cleared when the trip ends.
+- Hand-offs to Citymapper and Google Maps use their own https links, never a custom URL scheme
+  another app could claim. Nearby departures and a journey's departure boards come from
+  Transitous, with your position or the stop's: turning Transitous off in Route sources turns
+  them off too.
 - Report a security problem through the repository's private vulnerability reporting
   (Security tab, Report a vulnerability), not in a public issue.
 

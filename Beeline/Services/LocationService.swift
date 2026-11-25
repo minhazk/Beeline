@@ -55,6 +55,8 @@ final class LocationService: NSObject, CLLocationManagerDelegate {
 
     /// A fresh fix, or the last one if it's under 20 seconds old.
     func current() async throws -> Coordinate {
+        // Turned off in Settings: no fix is asked for, and none from before is passed on.
+        if isDenied { throw CLError(.denied) }
         if let live, live.timestamp.timeIntervalSinceNow > -20 { return Coordinate(live.coordinate) }
         if let location = manager.location, location.timestamp.timeIntervalSinceNow > -20 {
             return Coordinate(location.coordinate)
@@ -74,6 +76,8 @@ final class LocationService: NSObject, CLLocationManagerDelegate {
             do {
                 for try await update in CLLocationUpdate.liveUpdates(.otherNavigation) {
                     guard let self, !Task.isCancelled else { return }
+                    // A fix already on its way when permission went isn't kept.
+                    if self.isDenied { continue }
                     if let location = update.location, location.horizontalAccuracy >= 0, location.horizontalAccuracy < 100 {
                         self.live = location
                         self.last = Coordinate(location.coordinate)
@@ -95,6 +99,8 @@ final class LocationService: NSObject, CLLocationManagerDelegate {
     nonisolated func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
         guard let coordinate = locations.last?.coordinate else { return }
         MainActor.assumeIsolated {
+            // A fix already on its way when permission went isn't kept.
+            guard !isDenied else { return }
             last = Coordinate(coordinate)
             waiting.forEach { $0.resume(returning: Coordinate(coordinate)) }
             waiting = []
@@ -121,6 +127,13 @@ final class LocationService: NSObject, CLLocationManagerDelegate {
         MainActor.assumeIsolated {
             authorization = status
             if status == .authorizedWhenInUse || status == .authorizedAlways { self.manager.requestLocation() }
+            // Permission taken away: where you were is forgotten, not kept for the next search.
+            if status == .denied || status == .restricted {
+                last = nil
+                live = nil
+                waiting.forEach { $0.resume(throwing: CLError(.denied)) }
+                waiting = []
+            }
         }
     }
 }

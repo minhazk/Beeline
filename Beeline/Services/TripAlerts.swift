@@ -79,6 +79,15 @@ enum TripAlerts {
         let ids = allIDs + [offerID]
         center.removePendingNotificationRequests(withIdentifiers: ids)
         center.removeDeliveredNotifications(withIdentifiers: ids)
+        // And any the count above doesn't reach (a trip re-planned on the way can have more stops
+        // off than it allows for), by what every one of Go's is called.
+        Task {
+            let pending = await center.pendingNotificationRequests().map(\.identifier)
+            let delivered = await center.deliveredNotifications().map(\.request.identifier)
+            let more = (pending + delivered).filter { $0.hasPrefix(prefix) }
+            center.removePendingNotificationRequests(withIdentifiers: more)
+            center.removeDeliveredNotifications(withIdentifiers: more)
+        }
     }
 }
 
@@ -103,6 +112,8 @@ extension TripAlerts {
 final class SystemTripAlerts: TripAlertScheduling {
     private var queue: Task<Void, Never>?
     private var authorised: Bool?
+    /// Counts every offer made or taken back, so a queued one knows if it is still the latest.
+    private var offerGeneration = 0
 
     func schedule(_ alerts: [TripAlert]) {
         let previous = queue
@@ -115,27 +126,40 @@ final class SystemTripAlerts: TripAlertScheduling {
     func cancel() {
         let previous = queue
         let ids = TripAlerts.allIDs
+        // The trip is over: the ones already shown name where you were going, and go too.
         UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: ids)
+        UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: ids)
         queue = Task {
             await previous?.value
-            UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: ids)
+            let center = UNUserNotificationCenter.current()
+            // Whatever the trip put up, by its prefix: a journey re-planned on the way can have
+            // more stops off than the ids counted above. The offer has its own taking back.
+            let pending = await center.pendingNotificationRequests().map(\.identifier)
+            let delivered = await center.deliveredNotifications().map(\.request.identifier)
+            let all = Array(Set(ids + (pending + delivered).filter { $0.hasPrefix(TripAlerts.prefix) && $0 != TripAlerts.offerID }))
+            center.removePendingNotificationRequests(withIdentifiers: all)
+            center.removeDeliveredNotifications(withIdentifiers: all)
         }
     }
 
     func offer(_ message: Replan.Message?) {
         // Taken back straight away, not queued: End releases the trip (and this) at once.
+        offerGeneration += 1
+        let generation = offerGeneration
         UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: [TripAlerts.offerID])
         UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: [TripAlerts.offerID])
         guard message != nil else { return }
         let previous = queue
         queue = Task { [weak self] in
             await previous?.value
-            await self?.show(message)
+            await self?.show(message, generation: generation)
         }
     }
 
-    /// Ordinary, not Time Sensitive: a suggestion, not a warning.
-    private func show(_ message: Replan.Message?) async {
+    /// Ordinary, not Time Sensitive: a suggestion, not a warning. Only the latest offer is shown:
+    /// one taken back (or replaced) while it waited its turn never appears after the fact.
+    private func show(_ message: Replan.Message?, generation: Int) async {
+        guard generation == offerGeneration else { return }
         let center = UNUserNotificationCenter.current()
         center.removePendingNotificationRequests(withIdentifiers: [TripAlerts.offerID])
         center.removeDeliveredNotifications(withIdentifiers: [TripAlerts.offerID])
@@ -143,7 +167,7 @@ final class SystemTripAlerts: TripAlertScheduling {
         if authorised == nil {
             authorised = (try? await center.requestAuthorization(options: [.alert, .sound])) == true
         }
-        guard authorised == true else { return }
+        guard authorised == true, generation == offerGeneration else { return }
         let content = UNMutableNotificationContent()
         content.title = message.title
         content.body = message.detail
@@ -151,6 +175,11 @@ final class SystemTripAlerts: TripAlertScheduling {
         content.interruptionLevel = .active
         content.categoryIdentifier = TripAlerts.offerCategory
         try? await center.add(UNNotificationRequest(identifier: TripAlerts.offerID, content: content, trigger: nil))
+        // Taken back while it was being put up.
+        if generation != offerGeneration {
+            center.removePendingNotificationRequests(withIdentifiers: [TripAlerts.offerID])
+            center.removeDeliveredNotifications(withIdentifiers: [TripAlerts.offerID])
+        }
     }
 
     private func apply(_ alerts: [TripAlert]) async {
@@ -186,7 +215,11 @@ final class NotificationPresenter: NSObject, UNUserNotificationCenterDelegate, S
     }
 
     func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse) async {
-        if response.notification.request.content.categoryIdentifier == TripAlerts.offerCategory {
+        let request = response.notification.request
+        if request.content.categoryIdentifier == TripAlerts.offerCategory {
+            // Only the offer Beeline itself put up on this phone: a push that borrows the
+            // category can't switch or keep a route.
+            guard request.identifier == TripAlerts.offerID, !(request.trigger is UNPushNotificationTrigger) else { return }
             let action = response.actionIdentifier
             await MainActor.run {
                 // Opened cold by the tap: the trip isn't back yet, so the tap waits for it (`TripResume`).

@@ -75,7 +75,8 @@ enum TfLBuses {
     static func lineID(_ line: String?) -> String? {
         guard let line else { return nil }
         let id = Journey.normalise(line)
-        return id.isEmpty || id.count > 5 ? nil : id
+        // It goes into the request's path: letters and digits as TfL writes them, nothing else.
+        return id.isEmpty || id.count > 5 || !id.allSatisfy(\.isASCII) ? nil : id
     }
 
     static func routeRequest(_ lineID: String, direction: String, appKey: String?) -> URLRequest {
@@ -94,27 +95,40 @@ enum TfLBuses {
 
     // MARK: Parsing
 
+    static let maxSequences = 24, maxStops = 300
+    /// Stop-to-point comparisons one reply may cost in fitting its stops to its drawn lines: a
+    /// real route's are a few hundred thousand. Past this the stops themselves are the path.
+    static let fittingBudget = 20_000_000
+
     /// Every way the route runs in one direction (most have one; some have short workings).
     static func parseRoutes(_ data: Data) throws -> [Route] {
         let response = try HTTP.decode(RouteDTO.self, from: data)
-        let lines: [[Coordinate]] = response.lineStrings.compactMap { string in
+        // A route has a handful of drawn lines and a few dozen stops each way: far more is not a
+        // route, and fitting every stop to every point of every line would take the app with it.
+        let lines: [[Coordinate]] = response.lineStrings.prefix(Self.maxSequences).compactMap { string in
             guard let json = string.data(using: .utf8),
                   let nested = try? JSONDecoder().decode([[[Double]]].self, from: json) else { return nil }
-            let points = nested.flatMap { $0 }.compactMap { $0.count >= 2 ? Coordinate(latitude: $0[1], longitude: $0[0]) : nil }
+            let points = nested.flatMap { $0 }.prefix(Polyline.maxPoints).compactMap { $0.count >= 2 ? Coordinate.checked(latitude: $0[1], longitude: $0[0]) : nil }
             return points.count > 1 ? points : nil
         }
-        return response.stopPointSequences.compactMap { sequence in
-            let stops = sequence.stopPoint.compactMap { stop -> Route.Stop? in
-                guard let lat = stop.lat, let lon = stop.lon else { return nil }
+        var budget = Self.fittingBudget
+        return response.stopPointSequences.prefix(Self.maxSequences).compactMap { sequence in
+            let stops = sequence.stopPoint.prefix(Self.maxStops).compactMap { stop -> Route.Stop? in
+                guard let lat = stop.lat, let lon = stop.lon, let coordinate = Coordinate.checked(latitude: lat, longitude: lon) else { return nil }
                 // Bus stop names are already as the flag says ("Stratford City Bus Station").
                 return Route.Stop(id: stop.id, name: stop.name.trimmingCharacters(in: .whitespaces),
                                   letter: stop.stopLetter.flatMap { $0.isEmpty || $0.hasPrefix("->") ? nil : $0 },
-                                  coordinate: Coordinate(latitude: lat, longitude: lon))
+                                  coordinate: coordinate)
             }
             guard stops.count > 1 else { return nil }
             // The drawn line these stops sit on best.
-            let fitted = lines.map { line in (line, Geometry.snap(stops.map(\.coordinate), to: line)) }
-                .min { $0.1.error < $1.1.error }
+            var fits: [([Coordinate], (along: [Double], error: Double))] = []
+            for line in lines {
+                budget -= stops.count * line.count
+                guard budget > 0 else { break }
+                fits.append((line, Geometry.snap(stops.map(\.coordinate), to: line)))
+            }
+            let fitted = fits.min { $0.1.error < $1.1.error }
             let along = fitted.flatMap { $0.1.error < 40 ? $0.1.along : nil }
             return Route(lineID: response.lineId, direction: sequence.direction ?? response.direction ?? "",
                          stops: stops, path: fitted?.0 ?? stops.map(\.coordinate), stopAlong: along)

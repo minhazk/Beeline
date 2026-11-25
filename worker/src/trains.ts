@@ -5,7 +5,7 @@
 // line's station order (linemap.ts) says whether it calls where you get off on the way.
 
 import { keyFor, type LineMap } from "./linemap.ts";
-import { fetchTfL } from "./tfl.ts";
+import { fetchTfL, type TfLAccess } from "./tfl.ts";
 import type { Segment } from "./types.ts";
 
 const BASE = "https://api.tfl.gov.uk";
@@ -114,9 +114,9 @@ export function nextTrains(predictions: Prediction[], follow: Segment, map: Line
 
 /** One station's trains on one line, kept 20 seconds at the edge so every Live Activity there,
  * and the app asking at the same moment, share one request. */
-export async function predictions(lineId: string, mode: string, stopIds: string, appKey?: string): Promise<Prediction[]> {
+export async function predictions(lineId: string, mode: string, stopIds: string, access?: string | TfLAccess): Promise<Prediction[]> {
   // A station's ids, the one on the line's routes first ("910GPADTLL|910GPADTON").
   const [stop] = stopIds.split("|");
-  const json = await fetchTfL(trainsURL(lineId, mode, stop), 20, appKey, 5000);
+  const json = await fetchTfL(trainsURL(lineId, mode, stop), 20, access, 5000);
   return boards(mode) ? parseDepartures(json) : parseArrivals(json);
 }

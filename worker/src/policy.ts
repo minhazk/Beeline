@@ -23,6 +23,13 @@ export interface DeviceState {
   /** Pushes APNs couldn't take for a passing reason (busy, rate limited, network), by what they
    * were for (an alert id, or "planned:" and one): tried again next run, up to `MAX_RETRIES`. */
   retries?: Record<string, number>;
+  /** APNs says this push token is not this app's (BadDeviceToken, DeviceTokenNotForTopic):
+   * when it first and last said so, and how often. Pushes wait longer after each refusal. */
+  refused?: { first: number; last: number; count: number };
+  /** When Apple last took a push for this phone, a silent one included. */
+  heard?: number;
+  /** When its invitation was first found gone from APP_TOKEN; cleared if it comes back. */
+  revoked?: number;
 }
 
 export const MAX_RETRIES = 3;

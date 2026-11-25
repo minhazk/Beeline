@@ -5,15 +5,15 @@
 // push-to-start token. Times tick on the phone between pushes; a push is only for news: a train
 // gone, a new estimate, a cancellation, trouble on the way.
 
-import { canPush, send, type Sent } from "./apns.ts";
-import type { Env } from "./checks.ts";
+import { canPush, send, type Sent, type TokenMemo } from "./apns.ts";
+import { maxPushes, tflRequests, type Env } from "./checks.ts";
 import { inGroups, lineCatalog, lineChecks, stationChecks } from "./linechecks.ts";
 import { keyFor, loadLineMaps, type LineMap } from "./linemap.ts";
 import { issuesFor } from "./match.ts";
 import type { Push } from "./push.ts";
 import { activeWindows, instant, localTime, wayOf } from "./schedule.ts";
 import { FOLLOWED_MODES, nextTrains, predictions, type Prediction, type Train } from "./trains.ts";
-import type { LineStatus, StationDisruption } from "./tfl.ts";
+import type { LineStatus, StationDisruption, TfLAccess } from "./tfl.ts";
 import type { Alert, Environment, Segment, TimeWindow } from "./types.ts";
 
 /** What the Live Activity shows, as the app's NextTrainAttributes.ContentState decodes it.
@@ -69,22 +69,23 @@ export function shortNotice(title: string, lineName: string): string {
 }
 
 /** Everything needed to say what each of these follows shows now: one request per station and
- * line for the trains, the line's station order, and TfL's status for trouble on the way. A
- * follow whose trains TfL didn't give comes back undefined, and keeps what it last showed. */
-export async function lookup(env: Env, follows: Segment[], now: number): Promise<(follow: Segment) => ContentState | undefined> {
-  const maps = await loadLineMaps(follows.map((f) => f.line.id), env.TFL_APP_KEY, now);
+ * line for the trains, the line's station order, and TfL's status for trouble on the way, within
+ * what the invocation may still ask (`tfl`). A follow whose trains TfL didn't give comes back
+ * undefined, and keeps what it last showed. */
+export async function lookup(env: Env, follows: Segment[], now: number, tfl: TfLAccess): Promise<(follow: Segment) => ContentState | undefined> {
+  const maps = await loadLineMaps(follows.map((f) => f.line.id), tfl, now);
   const boards = new Map<string, Prediction[]>();
   const at = (f: Segment) => `${f.line.id}|${f.mode}|${f.from?.id}`;
   await inGroups([...new Map(follows.map((f) => [at(f), f])).values()], async (f) => {
-    try { boards.set(at(f), await predictions(f.line.id, f.mode, f.from!.id, env.TFL_APP_KEY)); }
+    try { boards.set(at(f), await predictions(f.line.id, f.mode, f.from!.id, tfl)); }
     catch (error) { console.error("trains unavailable", f.line.id, String(error)); }
   });
   let lines: LineStatus[] = [], stations: StationDisruption[] = [];
   try {
-    const catalog = await lineCatalog(env.TFL_APP_KEY);
+    const catalog = await lineCatalog(tfl);
     [lines, stations] = await Promise.all([
-      lineChecks(follows, catalog, env.TFL_APP_KEY).then((r) => r.lines),
-      stationChecks(follows, env.TFL_APP_KEY).then((r) => r.stations),
+      lineChecks(follows, catalog, tfl).then((r) => r.lines),
+      stationChecks(follows, tfl).then((r) => r.stations),
     ]);
   } catch {
     // Trouble is extra: the trains still go out without it.
@@ -283,7 +284,11 @@ export async function runActivities(env: Env, now = Date.now()): Promise<{ follo
   const { results: devices } = await env.DB.prepare(
     "SELECT token, environment, time_zone, alerts, start_token, started FROM devices WHERE start_token IS NOT NULL",
   ).all<StartRow>();
-  const due = dueStarts(devices, now);
+  // Workers Free gives an invocation 50 requests and 50 D1 queries: at most `maxPushes` pushes a
+  // run (ends, updates and starts together), the rest the next minute, and TfL what's left.
+  let pushes = maxPushes(env);
+  const memo: TokenMemo = {};
+  const due = dueStarts(devices, now).slice(0, pushes);
   if (!rows.length && !due.length) return result;
 
   const live: (ActivityRow & { followed: Segment })[] = [];
@@ -292,23 +297,27 @@ export async function runActivities(env: Env, now = Date.now()): Promise<{ follo
       live.push({ ...row, followed: JSON.parse(row.follow) as Segment });
       continue;
     }
+    if (pushes <= 0) continue;
+    pushes--;
     // Its time is up: off the Lock Screen, and forgotten whether or not APNs took it.
     await env.DB.prepare("DELETE FROM activities WHERE token = ?1 AND ends_at = ?2").bind(row.token, row.ends_at).run();
-    try { await send(env, row.token, row.environment, endPush(parse(row.state), now), now); } catch {}
+    try { await send(env, row.token, row.environment, endPush(parse(row.state), now), now, memo); } catch {}
     result.ended++;
   }
   if (!live.length && !due.length) return result;
 
-  const show = await lookup(env, [...live.map((r) => r.followed), ...due.map((d) => d.follow)], now);
+  const tfl = { key: env.TFL_APP_KEY, ops: tflRequests(env, maxPushes(env)) };
+  const show = await lookup(env, [...live.map((r) => r.followed), ...due.map((d) => d.follow)], now, tfl);
 
   for (const row of live) {
     const state = show(row.followed);
     if (!state) continue;
     result.followed++;
     const priority = urgency(parse(row.state), state, now);
-    if (!priority) continue;
+    if (!priority || pushes <= 0) continue;
+    pushes--;
     try {
-      const sent = await send(env, row.token, row.environment, updatePush(state, priority, now), now);
+      const sent = await send(env, row.token, row.environment, updatePush(state, priority, now), now, memo);
       if (dead(sent)) {
         await env.DB.prepare("DELETE FROM activities WHERE token = ?1").bind(row.token).run();
         continue;
@@ -327,10 +336,11 @@ export async function runActivities(env: Env, now = Date.now()): Promise<{ follo
 
   for (const start of due) {
     const state = show(start.follow);
-    if (!state) continue;
+    if (!state || pushes <= 0) continue;
+    pushes--;
     const { device } = start;
     try {
-      const sent = await send(env, device.start_token, device.environment, startPush(attributesFor(start.alert, start.follow, start.ends), state, now), now);
+      const sent = await send(env, device.start_token, device.environment, startPush(attributesFor(start.alert, start.follow, start.ends), state, now), now, memo);
       if (dead(sent)) {
         await env.DB.prepare("UPDATE devices SET start_token = NULL WHERE token = ?1 AND start_token = ?2").bind(device.token, device.start_token).run();
         continue;

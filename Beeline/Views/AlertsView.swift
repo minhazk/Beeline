@@ -32,8 +32,10 @@ struct AlertsView: View {
     private var contentForm: some View {
         Form {
             if store.alerts.isEmpty {
+                // A removal that didn't reach the server is said here too, with Try again.
+                if let problem = store.syncProblem { trouble(problem) }
                 emptyState
-                if !store.isConfigured { connect }
+                if store.isConfigured { server } else { connect }
             } else {
                 // Whatever stops alerts arriving comes first, with the button that fixes it.
                 if !store.isConfigured { connect }
@@ -41,6 +43,7 @@ struct AlertsView: View {
                 if store.isConfigured, needsPermissionAction { notifications }
                 lines
                 if store.isConfigured, !needsPermissionAction { notifications }
+                if store.isConfigured { server }
             }
         }
         .navigationTitle("Line alerts")
@@ -96,7 +99,7 @@ struct AlertsView: View {
                 NavigationLink {
                     AlertEditor(alert: alert, isNew: false)
                 } label: {
-                    AlertRow(alert: alert, status: store.status[alert.id], pending: store.delivery.pending[alert.id])
+                    AlertRow(alert: alert, verdict: store.verdict(for: alert.id), pending: store.delivery.pending[alert.id])
                 }
             }
             .onDelete { offsets in offsets.map { store.alerts[$0].id }.forEach(store.delete) }
@@ -128,13 +131,33 @@ struct AlertsView: View {
 
     // MARK: What needs doing
 
+    private var serverForm: some View {
+        Form { AlertServerSection(draft: serverDraft, focus: $serverField, showsHelp: true) }
+            .navigationTitle("Alerts server")
+            .navigationBarTitleDisplayMode(.inline)
+            .keepsSheetWhenUnfolded(true)
+    }
+
+    /// Within reach once connected too: a server entered wrongly, one no longer trusted, or an
+    /// invitation that was replaced can always be changed or removed.
+    private var server: some View {
+        Section {
+            NavigationLink {
+                serverForm
+            } label: {
+                LabeledContent {
+                    Text(store.server.map { $0.isBuiltIn ? "Built in" : $0.label } ?? "")
+                } label: {
+                    Label("Alerts server", systemImage: "antenna.radiowaves.left.and.right")
+                }
+            }
+        }
+    }
+
     private var connect: some View {
         Section {
             NavigationLink {
-                Form { AlertServerSection(draft: serverDraft, focus: $serverField, showsHelp: true) }
-                    .navigationTitle("Alerts server")
-                    .navigationBarTitleDisplayMode(.inline)
-                    .keepsSheetWhenUnfolded(true)
+                serverForm
             } label: {
                 AlertActionRow(symbol: "antenna.radiowaves.left.and.right.slash",
                                title: "Connect alerts server",
@@ -146,8 +169,7 @@ struct AlertsView: View {
 
     private func trouble(_ problem: String) -> some View {
         Section {
-            AlertActionRow(symbol: "exclamationmark.triangle.fill", title: store.statusProblem != nil ? "Couldn't check your lines" : "Alerts may be out of date",
-                           detail: problem, tint: Theme.warning)
+            AlertActionRow(symbol: "exclamationmark.triangle.fill", title: troubleTitle, detail: problem, tint: Theme.warning)
             Button("Try again", systemImage: "arrow.clockwise") {
                 Task {
                     if store.syncProblem != nil { store.resume() }
@@ -155,6 +177,11 @@ struct AlertsView: View {
                 }
             }
         }
+    }
+
+    private var troubleTitle: String {
+        guard store.statusProblem != nil else { return "Alerts may be out of date" }
+        return store.status.isEmpty ? "Couldn't check your lines" : "Couldn't check some lines"
     }
 
     /// Notifications that won't arrive, or would arrive late: asked about above the lines.
@@ -263,7 +290,7 @@ struct AlertActionRow: View {
 /// One alert: its lines, when, and what TfL says now.
 struct AlertRow: View {
     var alert: RouteAlert
-    var status: AlertStatus.Entry?
+    var verdict: AlertStore.Verdict
     var pending: String? = nil
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
@@ -292,20 +319,22 @@ struct AlertRow: View {
             Text("On this phone only. \(pending)")
                 .font(.caption).foregroundStyle(Theme.warning)
         } else {
-            AlertSummary(status: status)
+            AlertSummary(verdict: verdict)
         }
     }
 
     @ViewBuilder private var glyph: some View {
         if pending != nil {
             Image(systemName: "exclamationmark.circle.fill").foregroundStyle(Theme.warning)
-        } else if let status {
+        } else if let status = verdict.entry {
             switch status.issues.map(\.level).max() {
             case .closed: Image(systemName: "xmark.octagon.fill").foregroundStyle(Theme.warning)
             case .delays: Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(Theme.warning)
             case .minor: Image(systemName: "info.circle.fill").foregroundStyle(.secondary)
             case nil: Image(systemName: "checkmark.circle.fill").foregroundStyle(Theme.live)
             }
+        } else if AlertStore.shared.isConfigured, verdict == .unavailable {
+            Image(systemName: "exclamationmark.circle").foregroundStyle(.secondary)
         } else {
             Image(systemName: AlertStore.shared.isConfigured ? "circle.dotted" : "bell.slash").foregroundStyle(.tertiary)
         }
@@ -314,10 +343,10 @@ struct AlertRow: View {
 
 /// "Good service", the worst of what's wrong, or what's planned on your days.
 struct AlertSummary: View {
-    var status: AlertStatus.Entry?
+    var verdict: AlertStore.Verdict
 
     var body: some View {
-        if let status {
+        if let status = verdict.entry {
             if let worst = status.issues.max(by: { $0.level < $1.level }) {
                 Text(status.issues.count > 1 ? "\(worst.title) +\(status.issues.count - 1)" : worst.title)
                     .font(.subheadline.weight(.semibold))
@@ -334,9 +363,16 @@ struct AlertSummary: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
+            } else if status.upcomingUnknown {
+                Label("Planned works couldn't be checked", systemImage: "calendar.badge.exclamationmark")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
             }
+        } else if !AlertStore.shared.isConfigured {
+            Text("Server disconnected").font(.subheadline).foregroundStyle(.secondary)
         } else {
-            Text(AlertStore.shared.isConfigured ? "Checking TfL…" : "Server disconnected")
+            Text(verdict == .unavailable ? "Couldn't check TfL" : "Checking TfL…")
                 .font(.subheadline).foregroundStyle(.secondary)
         }
     }

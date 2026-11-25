@@ -260,6 +260,10 @@ struct AlertEditor: View {
             Section("Planned, when you travel") {
                 ForEach(status.upcoming) { AlertIssueRow(issue: $0, planned: true) }
             }
+        } else if status.upcomingUnknown {
+            Section("Planned, when you travel") {
+                Label("Planned works couldn't be checked", systemImage: "calendar.badge.exclamationmark").foregroundStyle(.secondary)
+            }
         }
     }
 

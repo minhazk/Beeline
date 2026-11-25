@@ -68,6 +68,12 @@ struct RootView: View {
             .environment(scene)
             .environment(departures)
             .environment(buses)
+            .onChange(of: settings.isEnabled(.transitous), initial: true) { _, on in departures.isOn = on }
+            .onChange(of: location.isAuthorized) { _, authorized in
+                guard !authorized else { return }
+                departures.forgetNearby()
+                scene.forgetHomeFix()
+            }
             .task { await resumeTrip() }
     }
 

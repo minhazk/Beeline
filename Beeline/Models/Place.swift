@@ -18,6 +18,18 @@ struct Coordinate: Codable, Hashable, Sendable {
 
 extension Coordinate {
     init(_ c: CLLocationCoordinate2D) { self.init(latitude: c.latitude, longitude: c.longitude) }
+
+    /// A point a service sent, if it is one on Earth. A number of any size is valid JSON, and
+    /// distances worked from one that isn't a place are not numbers the rest can count with.
+    static func checked(latitude: Double, longitude: Double) -> Coordinate? {
+        guard (-90...90).contains(latitude), (-180...180).contains(longitude) else { return nil }
+        return Coordinate(latitude: latitude, longitude: longitude)
+    }
+}
+
+extension Double {
+    /// A length a service sent, if it could be one: not negative, and not further than round the world.
+    var plausibleMetres: Double? { (0...40_100_000).contains(self) ? self : nil }
 }
 
 struct Place: Codable, Hashable, Sendable, Identifiable {

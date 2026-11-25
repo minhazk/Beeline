@@ -1,6 +1,13 @@
 # --- secrets: never commit ---
 Config/Secrets.xcconfig
+Config/Secrets*.xcconfig
+!Config/Secrets.example.xcconfig
 *.p8
+*.p12
+*.cer
+*.mobileprovision
+*.ipa
+*.xcarchive
 .env
 .env.*
 

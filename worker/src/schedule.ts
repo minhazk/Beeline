@@ -19,6 +19,8 @@ export function localTime(ms: number, timeZone: string): LocalTime {
     format = new Intl.DateTimeFormat("en-GB", {
       timeZone, hourCycle: "h23", weekday: "short", year: "numeric", month: "numeric", day: "numeric", hour: "numeric", minute: "numeric",
     });
+    // Zones are canonical before they get here; this only bounds what an isolate can hold.
+    if (formatters.size >= 600) formatters.clear();
     formatters.set(timeZone, format);
   }
   const parts = Object.fromEntries(format.formatToParts(new Date(ms)).map((p) => [p.type, p.value]));

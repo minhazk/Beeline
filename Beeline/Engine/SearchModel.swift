@@ -31,6 +31,17 @@ final class SearchModel {
 
     var isSearching: Bool { statuses.values.contains(.loading) }
 
+    /// A search that can't be made (it starts from where you are, and location is off): the
+    /// last one's routes aren't left on show under the new trip's name.
+    func clear(for query: JourneyQuery) {
+        task?.cancel()
+        self.query = query
+        statuses = [:]
+        journeys = []
+        found = []
+        appleEstimate = nil
+    }
+
     func search(_ query: JourneyQuery, settings: AppSettings) {
         task?.cancel()
         self.query = query
