@@ -50,27 +50,32 @@ struct ResultsSheet: View {
         let ranked = ranked
         let reference = reference(ranked)
         ScrollView {
-            VStack(alignment: .leading, spacing: 12) {
+            VStack(alignment: .leading, spacing: 10) {
                 if isTight { compactTripEditor } else { tripEditor }
                 controls
-                if ranked.top.isEmpty { statusLine(ranked) }
+                if let first = ranked.top.first {
+                    routeLink(first, reference: reference, isLead: true)
+                        .surface(highlighted: true)
+                } else if ranked.more.isEmpty {
+                    statusLine(ranked)
+                }
                 let notices = notices(ranked)
                 if !notices.isEmpty { NoticeList(notices: notices) }
-                if !ranked.top.isEmpty {
-                    routeGroup(ranked.top, reference: reference, leadFirst: true)
-                    statusLine(ranked)
+                if ranked.top.count > 1 {
+                    routeGroup(ranked.top.dropFirst(), reference: reference)
                 }
                 appleHintIfQuicker(reference)
                 if ranked.onlyBlockedRoutes {
                     Label("All routes go through a reported closure", systemImage: "exclamationmark.triangle.fill")
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(Theme.warning)
-                    routeGroup(ranked.more, reference: nil, leadFirst: false)
+                    routeGroup(ranked.more[...], reference: nil)
                 } else if !ranked.more.isEmpty {
                     moreSection(ranked.more, reference: reference)
                 }
                 if ranked.hidden > 0 { hiddenNote(ranked.hidden, all: ranked.top.isEmpty && ranked.more.isEmpty) }
                 if ranked.top.isEmpty && ranked.more.isEmpty && ranked.hidden == 0 && !model.isSearching { emptyState }
+                if !ranked.top.isEmpty || !ranked.more.isEmpty { statusLine(ranked) }
             }
             .padding(.horizontal, 16)
             .padding(.bottom, 30)
@@ -152,7 +157,7 @@ struct ResultsSheet: View {
         ZStack(alignment: .trailing) {
             VStack(spacing: 0) {
                 placeRow(label: "From", place: query.origin, isStart: true) { editing = .origin }
-                Divider().padding(.leading, 44)
+                Divider().padding(.leading, 44).padding(.trailing, 64)
                 placeRow(label: "To", place: query.destination, isStart: false) { editing = .destination }
             }
             swapButton.padding(.trailing, 12)
@@ -165,11 +170,14 @@ struct ResultsSheet: View {
         Button {
             withAnimation(.snappy) { (query.origin, query.destination) = (query.destination, query.origin) }
         } label: {
-            Image(systemName: "arrow.up.arrow.down").font(.subheadline.weight(.semibold))
+            Image(systemName: "arrow.up.arrow.down")
+                .font(.subheadline.weight(.semibold))
+                .frame(width: 44, height: 44)
+                .background(Theme.ink.opacity(0.06), in: .circle)
+                .contentShape(.circle)
         }
-        .buttonStyle(.bordered)
-        .buttonBorderShape(.circle)
-        .tint(Theme.ink)
+        .buttonStyle(.plain)
+        .foregroundStyle(Theme.ink)
         .disabled(query.destination.isCurrentLocation && query.origin.isCurrentLocation)
         .accessibilityLabel("Swap start and destination")
     }
@@ -245,7 +253,7 @@ struct ResultsSheet: View {
             .padding(.leading, 12)
             .padding(.trailing, 68)
             .padding(.vertical, 8)
-            .frame(minHeight: 56)
+            .frame(minHeight: 48)
             .contentShape(.rect)
         }
         .buttonStyle(.plain)
@@ -255,14 +263,14 @@ struct ResultsSheet: View {
 
     private var controls: some View {
         @Bindable var settings = settings
-        return ViewThatFits(in: .horizontal) {
-            HStack(spacing: 8) { controlButtons(sortOrder: $settings.sortOrder) }
-                .fixedSize(horizontal: true, vertical: false)
-            VStack(alignment: .leading, spacing: 4) { controlButtons(sortOrder: $settings.sortOrder) }
+        return Group {
+            if typeSize.isAccessibilitySize {
+                VStack(alignment: .leading, spacing: 4) { controlButtons(sortOrder: $settings.sortOrder) }
+            } else {
+                FlowLayout(spacing: 6) { controlButtons(sortOrder: $settings.sortOrder) }
+            }
         }
-        .buttonStyle(.bordered)
-        .buttonBorderShape(.capsule)
-        .tint(Theme.ink)
+        .buttonStyle(.plain)
     }
 
     @ViewBuilder private func controlButtons(sortOrder: Binding<SortOrder>) -> some View {
@@ -283,9 +291,10 @@ struct ResultsSheet: View {
         .accessibilityLabel("Sort: \(sortOrder.wrappedValue.label)")
         let active = settings.routeFilter.activeCount
         Button { showFilters = true } label: {
-            controlLabel(active > 0 ? "Filters · \(active)" : "Filters", systemImage: "line.3.horizontal.decrease")
+            controlLabel(active > 0 ? "Filters · \(active)" : "Filters", systemImage: "line.3.horizontal.decrease", active: active > 0)
         }
-        .tint(active > 0 ? Theme.tint : Theme.ink)
+        .accessibilityLabel("Filters")
+        .accessibilityValue(active == 0 ? "None active" : "\(active) active")
     }
 
     private func pickTime(_ kind: TimeKind) {
@@ -293,17 +302,27 @@ struct ResultsSheet: View {
         timeSheet = kind
     }
 
-    private func controlLabel(_ title: String, systemImage: String) -> some View {
+    private func controlLabel(_ title: String, systemImage: String, active: Bool = false) -> some View {
         Label(title, systemImage: systemImage)
-            .font(.subheadline.weight(.medium))
+            .font(.footnote.weight(.semibold))
+            .foregroundStyle(active ? Theme.tint : Theme.ink)
+            .padding(.horizontal, 11)
+            .frame(minHeight: 44)
+            .background(active ? Theme.tint.opacity(0.12) : Theme.ink.opacity(0.06), in: .capsule)
+            .contentShape(.capsule)
     }
 
     private var timeLabel: String {
         switch query.time {
         case .leaveNow: "Leave now"
-        case .departAt(let d): "Depart \(d.clock)"
-        case .arriveBy(let d): "Arrive by \(d.clock)"
+        case .departAt(let date): "Depart \(controlTime(date))"
+        case .arriveBy(let date): "Arrive by \(controlTime(date))"
         }
+    }
+
+    private func controlTime(_ date: Date) -> String {
+        if Calendar.current.isDateInToday(date) { return date.clock }
+        return "\(date.formatted(.dateTime.month(.abbreviated).day())) \(date.clock)"
     }
 
     // MARK: Status
@@ -321,8 +340,10 @@ struct ResultsSheet: View {
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.leading)
                 Spacer(minLength: 0)
-                Image(systemName: "info.circle").font(.subheadline).foregroundStyle(Theme.tint)
-                    .accessibilityHidden(true)
+                Label("Sources", systemImage: "info.circle")
+                    .labelStyle(.iconOnly)
+                    .font(.subheadline)
+                    .foregroundStyle(Theme.tint)
             }
             .padding(.horizontal, 4)
             .frame(minHeight: 44)
@@ -339,19 +360,10 @@ struct ResultsSheet: View {
     private func summary(_ ranked: JourneyRanker.Ranked) -> String {
         let routes = ranked.top.count + ranked.more.count
         let found = "\(routes) route\(routes == 1 ? "" : "s")"
-        let asking = ProviderID.allCases.filter { model.statuses[$0] == .loading }.map(\.name)
-        if !asking.isEmpty {
-            return (routes > 0 ? "\(found) so far · " : "") + "asking \(asking.formatted(.list(type: .and)))"
-        }
-        let answered = ProviderID.allCases.filter { provider in
-            if provider != .apple, case .done = model.statuses[provider] { true } else { false }
-        }
-        let failed = ProviderID.allCases.filter { provider in
-            if case .failed = model.statuses[provider] { true } else { false }
-        }
-        var text = answered.isEmpty ? "No source answered" : "\(found) from \(answered.map(\.name).formatted(.list(type: .and)))"
-        if !failed.isEmpty { text += " · \(failed.map(\.name).formatted(.list(type: .and))) didn't answer" }
-        return text
+        if model.isSearching { return routes == 0 ? "Finding routes…" : "\(found) so far" }
+        let failed = model.statuses.values.filter { if case .failed = $0 { true } else { false } }.count
+        if failed == 0 { return found }
+        return "\(found) · \(failed) source\(failed == 1 ? "" : "s") unavailable"
     }
 
     /// Everything reported about the lines and stations these routes use, worst first.
@@ -385,22 +397,25 @@ struct ResultsSheet: View {
 
     // MARK: Routes
 
-    private func routeGroup(_ options: [RouteOption], reference: Date?, leadFirst: Bool) -> some View {
+    private func routeGroup(_ options: ArraySlice<RouteOption>, reference: Date?) -> some View {
         VStack(spacing: 0) {
             ForEach(Array(options.enumerated()), id: \.element.id) { index, option in
                 if index > 0 { Divider().padding(.leading, 16) }
-                NavigationLink(value: Page.journey(option.journey, query)) {
-                    VStack(alignment: .leading, spacing: 0) {
-                        RouteRow(option: option, isLead: leadFirst && index == 0, reference: reference, arriveBy: query.time.isArriveBy)
-                        if leadFirst, index == 0, showsLeadBoard, let ride = option.journey.transitLegs.first {
-                            leadBoard(ride)
-                        }
-                    }
-                }
-                .buttonStyle(.plain)
+                routeLink(option, reference: reference)
             }
         }
         .surface()
+    }
+
+    private func routeLink(_ option: RouteOption, reference: Date?, isLead: Bool = false) -> some View {
+        NavigationLink(value: Page.journey(option.journey, query)) {
+            VStack(alignment: .leading, spacing: 0) {
+                RouteRow(option: option, isLead: isLead, reference: reference, arriveBy: query.time.isArriveBy)
+                if isLead, showsLeadBoard, let ride = option.journey.transitLegs.first { leadBoard(ride) }
+            }
+            .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
     }
 
     @ViewBuilder private func appleHintIfQuicker(_ reference: Date?) -> some View {
@@ -416,9 +431,9 @@ struct ResultsSheet: View {
             HStack(spacing: 12) {
                 Image(systemName: "apple.logo").font(.title3).foregroundStyle(.secondary)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Apple Maps estimates \(estimate.travelTime.minutesText)")
+                    Text("Apple Maps · \(estimate.travelTime.minutesText)")
                         .font(.subheadline.weight(.semibold))
-                    Text(query.time.handoffTimeReminder ?? "Quicker than anything here. Open it to see Apple's route.")
+                    Text(query.time.handoffTimeReminder ?? "Faster estimate")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
@@ -446,7 +461,7 @@ struct ResultsSheet: View {
                 .contentShape(.rect)
             }
             .buttonStyle(.plain)
-            if showMore { routeGroup(more, reference: reference, leadFirst: false) }
+            if showMore { routeGroup(more[...], reference: reference) }
         }
     }
 
@@ -458,13 +473,15 @@ struct ResultsSheet: View {
     }
 
     private func hiddenNote(_ count: Int, all: Bool) -> some View {
-        HStack {
-            Text(all ? "Every route is hidden by your filters" : "\(count) route\(count == 1 ? "" : "s") hidden by your filters")
+        let layout = typeSize.isAccessibilitySize ? AnyLayout(VStackLayout(alignment: .leading, spacing: 0)) : AnyLayout(HStackLayout(spacing: 8))
+        return layout {
+            Text(all ? "Filters hide every route" : "\(count) route\(count == 1 ? "" : "s") filtered out")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
-            Spacer(minLength: 8)
+                .frame(maxWidth: .infinity, alignment: .leading)
             Button("Clear filters") { withAnimation(.snappy) { settings.routeFilter = RouteFilter() } }
                 .font(.footnote.weight(.semibold))
+                .frame(minHeight: 44)
         }
         .padding(.horizontal, 4)
         .frame(minHeight: 44)
@@ -474,10 +491,7 @@ struct ResultsSheet: View {
         VStack(spacing: 10) {
             FractalStar(size: 44, lit: [false, false, false, false])
             Text("No routes found").font(.headline)
-            Text("None of the sources came back with a journey. Try another app from the menu above, or check Settings.")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
+            OpenInRow(query: query)
         }
         .frame(maxWidth: .infinity)
         .padding(.top, 24)
@@ -496,12 +510,12 @@ struct RouteRow: View {
     private var journey: Journey { option.journey }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 9) {
+        VStack(alignment: .leading, spacing: 7) {
             ViewThatFits(in: .horizontal) {
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
                     duration.fixedSize(horizontal: true, vertical: false)
                     Spacer(minLength: 4)
-                    times.fixedSize(horizontal: true, vertical: false)
+                    times(alignment: .trailing).fixedSize(horizontal: true, vertical: false)
                     routeChevron
                 }
                 VStack(alignment: .leading, spacing: 4) {
@@ -510,45 +524,34 @@ struct RouteRow: View {
                         Spacer(minLength: 4)
                         routeChevron
                     }
-                    times
+                    times(alignment: .leading)
                 }
             }
 
             LegStrip(legs: journey.legs)
 
-            if let notice = journey.worstNotice {
-                Label(notice.title, systemImage: notice.severity == .minor ? "info.circle" : "exclamationmark.triangle.fill")
-                    .font(.footnote.weight(notice.severity == .closed ? .semibold : .regular))
-                    .foregroundStyle(notice.severity == .minor ? AnyShapeStyle(.secondary) : AnyShapeStyle(Theme.warning))
+            metrics
+
+            if let ride = firstRide {
+                boarding(ride)
+            }
+
+            if let alternateTimes {
+                Label("Also leave \(alternateTimes)", systemImage: "clock.arrow.circlepath")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+
+            if let disruption {
+                let minor = journey.worstNotice?.severity == .minor
+                Label(disruption, systemImage: minor ? "info.circle" : "exclamationmark.triangle.fill")
+                    .font(.footnote.weight(minor ? .regular : .semibold))
+                    .foregroundStyle(minor ? AnyShapeStyle(.secondary) : AnyShapeStyle(Theme.warning))
                     .lineLimit(typeSize.isAccessibilitySize ? nil : 2)
-            }
-
-            if let boarding {
-                Text(boarding).font(.footnote).foregroundStyle(.secondary)
-                    .lineLimit(typeSize.isAccessibilitySize ? nil : 1)
-            }
-
-            HStack(spacing: 6) {
-                Text(details)
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                if journey.hasDisruption && journey.notices.isEmpty {
-                    Image(systemName: "exclamationmark.triangle.fill").font(.caption).foregroundStyle(Theme.warning)
-                        .accessibilityLabel("Disruption")
-                }
-                Spacer(minLength: 8)
-                if !typeSize.isAccessibilitySize { sourceBadges }
-            }
-            if typeSize.isAccessibilitySize { sourceBadges }
-
-            if !option.otherDepartures.isEmpty {
-                Text("Or leave at \(option.otherDepartures.prefix(3).map(\.clock).formatted(.list(type: .or)))")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
             }
         }
         .padding(.horizontal, 16)
-        .padding(.vertical, 14)
+        .padding(.vertical, isLead ? 14 : 12)
         .contentShape(.rect)
         .accessibilityElement(children: .combine)
         .accessibilityLabel(spoken)
@@ -560,12 +563,12 @@ struct RouteRow: View {
             .monospacedDigit()
     }
 
-    private var times: some View {
-        VStack(alignment: .leading, spacing: 2) {
+    private func times(alignment: HorizontalAlignment) -> some View {
+        VStack(alignment: alignment, spacing: 2) {
             HStack(spacing: 6) {
                 if journey.isRealtime { LiveDot() }
-                Text("\(journey.departure.clock) – \(journey.arrival.clock)")
-                    .font(.subheadline.monospacedDigit())
+                JourneyTimeSpan(journey: journey)
+                    .font(.subheadline.weight(.medium))
             }
             if let delta { Text(delta).font(.footnote) }
         }
@@ -579,18 +582,33 @@ struct RouteRow: View {
             .accessibilityHidden(true)
     }
 
-    private var sourceBadges: some View {
-        FlowLayout(spacing: 4) {
-            ForEach(option.providers, id: \.self) { SourceBadge(provider: $0) }
-        }
-        .fixedSize(horizontal: !typeSize.isAccessibilitySize, vertical: false)
+    private var firstRide: Leg? { journey.legs.first(where: \.mode.isTransit) }
+    private var metrics: RouteMetrics { RouteMetrics(journey: journey, providers: option.providers) }
+
+    private var disruption: String? {
+        journey.worstNotice?.title ?? (journey.hasDisruption ? "Service disruption" : nil)
     }
 
-    /// When and where the first ride leaves.
-    private var boarding: String? {
-        guard let ride = journey.transitLegs.first else { return nil }
-        // The platform before the station's name, which is what gives way when the row is narrow.
-        return [ride.departure.clock, ride.platform.map { ride.standing(at: $0) }, ride.fromName].compactMap { $0 }.joined(separator: " · ")
+    private var alternateTimes: String? {
+        guard !option.otherDepartures.isEmpty else { return nil }
+        return option.otherDepartures.prefix(3).map(\.clock).joined(separator: " · ")
+    }
+
+    private func boarding(_ ride: Leg) -> some View {
+        let layout = typeSize.isAccessibilitySize ? AnyLayout(VStackLayout(alignment: .leading, spacing: 4)) : AnyLayout(HStackLayout(spacing: 6))
+        return layout {
+            Label("Board \(ride.departure.clock)", systemImage: "location.circle")
+                .fontWeight(.semibold)
+                .monospacedDigit()
+                .layoutPriority(1)
+            if let platform = ride.platform { PlatformTag(text: ride.standing(at: platform)) }
+            if !ride.fromName.isEmpty {
+                Text(ride.fromName)
+                    .lineLimit(typeSize.isAccessibilitySize ? nil : 1)
+            }
+        }
+        .font(.footnote)
+        .foregroundStyle(.secondary)
     }
 
     /// How much later than the quickest this gets you there.
@@ -601,19 +619,55 @@ struct RouteRow: View {
         return arriveBy ? "leave \(minutes) min earlier" : "+\(minutes) min"
     }
 
-    private var details: String {
-        var parts = [journey.changes == 0 ? "Direct" : journey.changes == 1 ? "1 change" : "\(journey.changes) changes"]
-        let walk = Int((journey.walkingTime / 60).rounded())
-        if walk > 0 { parts.append("\(walk) min walk") }
-        if let fare = journey.fare { parts.append(fare) }
-        return parts.joined(separator: " · ")
-    }
-
     private var spoken: String {
-        let lines = journey.transitLegs.compactMap(\.line).formatted(.list(type: .and))
-        return [isLead ? "Best route" : nil, journey.worstNotice?.title, journey.duration.minutesText, "leave \(journey.departure.clock), arrive \(journey.arrival.clock)",
-                delta, lines, boarding, details, option.providers.map(\.name).formatted(.list(type: .and)), journey.isRealtime ? "live times" : nil]
-            .compactMap { $0 }.joined(separator: ", ")
+        let lines = journey.transitLegs.map { $0.line ?? $0.mode.label }.formatted(.list(type: .and))
+        let board = firstRide.map { ride in
+            ["Board at \(ride.departure.clock)", ride.platform.map { ride.standing(at: $0) }, ride.fromName].compactMap { $0 }.joined(separator: ", ")
+        }
+        let providers = option.providers.map(\.name).formatted(.list(type: .and))
+        let timeSpan = JourneyTimeSpan(journey: journey)
+        let parts: [String?] = [isLead ? "Top route" : nil, journey.duration.minutesText, timeSpan.spoken, delta, lines, metrics.spoken,
+                                board, alternateTimes.map { "Other departures \($0)" }, disruption, providers, journey.isRealtime ? "Live times" : nil]
+        return parts.compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: ", ")
+    }
+}
+
+/// The same route facts in search and in the trip overview.
+struct RouteMetrics: View {
+    let journey: Journey
+    var providers: [ProviderID] = []
+
+    private var changes: String { journey.changes == 0 ? "Direct" : "\(journey.changes) change\(journey.changes == 1 ? "" : "s")" }
+    private var walking: String? { journey.walkingTime >= 30 ? "\(journey.walkingTime.minutesText) walk" : nil }
+
+    var spoken: String { [changes, walking, journey.fare].compactMap { $0 }.joined(separator: ", ") }
+
+    var body: some View {
+        FlowLayout(spacing: 8) {
+            Label(changes, systemImage: journey.changes == 0 ? "arrow.right" : "arrow.left.arrow.right")
+            if let walking { Label(walking, systemImage: "figure.walk") }
+            if let fare = journey.fare { Label(fare, systemImage: "creditcard") }
+            ForEach(providers, id: \.self) { SourceBadge(provider: $0) }
+        }
+        .font(.footnote.weight(.medium))
+        .foregroundStyle(.secondary)
+    }
+}
+
+struct JourneyTimeSpan: View {
+    let journey: Journey
+
+    var spoken: String { "Leave \(journey.departure.clock), arrive \(journey.arrival.clock)" }
+
+    var body: some View {
+        HStack(spacing: 5) {
+            Text(journey.departure.clock)
+            Image(systemName: "arrow.right").imageScale(.small).foregroundStyle(.secondary)
+            Text(journey.arrival.clock)
+        }
+        .monospacedDigit()
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(spoken)
     }
 }
 
@@ -662,39 +716,44 @@ struct NoticeList: View {
             .frame(width: 16)
     }
 
-    private func row(_ notice: ServiceNotice) -> some View {
+    @ViewBuilder private func row(_ notice: ServiceNotice) -> some View {
         let key = notice.displayID
-        let expanded = open.contains(key)
-        return Button {
-            withAnimation(.snappy) { if expanded { open.remove(key) } else { open.insert(key) } }
-        } label: {
-            HStack(alignment: .firstTextBaseline, spacing: 12) {
-                icon(notice)
-                VStack(alignment: .leading, spacing: 3) {
-                    HStack(alignment: .firstTextBaseline) {
-                        Text(notice.title).font(.subheadline.weight(.semibold))
-                        Spacer(minLength: 8)
-                        SourceBadge(provider: notice.source)
-                    }
-                    if notice.severity == .closed {
-                        Text("Check this closure before travelling.").font(.footnote).foregroundStyle(Theme.warning)
-                    }
-                    if !notice.detail.isEmpty {
-                        Text(notice.detail)
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(expanded ? nil : 2)
-                            .multilineTextAlignment(.leading)
-                    }
-                }
+        let isOpen = open.contains(key)
+        if notice.detail.isEmpty {
+            noticeRow(notice, isOpen: false)
+        } else {
+            Button {
+                withAnimation(.snappy) { if isOpen { open.remove(key) } else { open.insert(key) } }
+            } label: {
+                noticeRow(notice, isOpen: isOpen)
             }
-            .padding(.vertical, 10)
-            .frame(minHeight: 44)
-            .contentShape(.rect)
+            .buttonStyle(.plain)
+            .accessibilityHint(isOpen ? "Hides the full notice" : "Shows the full notice")
         }
-        .buttonStyle(.plain)
+    }
+
+    private func noticeRow(_ notice: ServiceNotice, isOpen: Bool) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+            icon(notice)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(notice.title).font(.subheadline.weight(.semibold))
+                if isOpen { Text(notice.detail).font(.footnote).foregroundStyle(.secondary) }
+                SourceBadge(provider: notice.source)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            if !notice.detail.isEmpty {
+                Image(systemName: "chevron.down")
+                    .font(.caption.weight(.semibold))
+                    .rotationEffect(.degrees(isOpen ? 180 : 0))
+                    .foregroundStyle(Theme.tint)
+                    .accessibilityHidden(true)
+            }
+        }
+        .multilineTextAlignment(.leading)
         .foregroundStyle(Theme.ink)
-        .accessibilityHint(expanded ? "Shows less" : "Shows TfL's full notice")
+        .padding(.vertical, 8)
+        .frame(minHeight: 44)
+        .contentShape(.rect)
     }
 }
 
@@ -748,10 +807,6 @@ struct SourcesPanel: View {
                     }
                 }
             }
-            Text("A route several sources found shows once, with each one's badge. The star's points fill in as Google, TfL, Transitous and Apple answer.")
-                .font(.footnote)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
         }
         .padding(20)
         .frame(width: 300)

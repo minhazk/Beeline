@@ -10,6 +10,7 @@ struct MapCanvas: View {
     @Environment(LocationService.self) private var location
     @Environment(LiveBusStore.self) private var buses
     @Environment(AppSettings.self) private var settings
+    @Environment(\.openURL) private var openURL
     @Environment(\.scenePhase) private var scenePhase
     @State private var height: CGFloat = 800
     /// The map is turned away from north, so the compass shows in place of 3D.
@@ -91,9 +92,8 @@ struct MapCanvas: View {
         }
         .onMapCameraChange(frequency: .onEnd) { restingCamera = $0.camera }
         .alert("Location is off", isPresented: $showsLocationNotice) {
-            Button("OK", role: .cancel) { }
-        } message: {
-            Text("Allow location in Settings to center the map on you.")
+            Button("Open Settings") { openURL(URL(string: UIApplication.openSettingsURLString)!) }
+            Button("Cancel", role: .cancel) { }
         }
         .onChange(of: scenePhase, initial: true) { _, phase in
             if phase == .active { location.startHeading() } else { location.stopHeading() }

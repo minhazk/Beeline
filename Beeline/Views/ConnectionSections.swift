@@ -1,83 +1,83 @@
 import SwiftUI
 
-/// The optional things a person can set: the same items, in the same words, in the first-run
-/// setup step and in Settings. Each value lives in one place (the Keychain, through AppSettings
-/// and AlertStore), so the two screens are two views of it.
-enum SetupItem {
-    case google, tfl, alerts, contact
-
-    var title: String {
-        switch self {
-        case .google: "Google Routes API key"
-        case .tfl: "TfL app key"
-        case .alerts: "Alerts server"
-        case .contact: "Contact for Transitous"
-        }
-    }
-
-    /// What it gives you.
-    var purpose: String {
-        switch self {
-        case .google: "Adds Google's routes and fares to every search."
-        case .tfl: "TfL answers without one; a key lifts its limit of 50 requests a minute."
-        case .alerts: "Needed for alerts on your lines: a small server of your own watches TfL while Beeline is closed and sends the notifications."
-        case .contact: "Transitous is run by volunteers and asks apps to say who to reach about their requests. Blank uses this build's contact, if it has one."
-        }
-    }
-
-    /// Where to get it.
-    var source: String {
-        switch self {
-        case .google: "From console.cloud.google.com: enable the Routes API, then create a key limited to iOS apps and the Routes API, with a daily cap."
-        case .tfl: "Free from api-portal.tfl.gov.uk."
-        case .alerts: "Enter your server address and this phone's invitation. The README explains how to set up a server."
-        case .contact: "Your email address or a web page of yours."
-        }
-    }
-
-    /// What it is for, that it's optional, and where to get it, as a section footer.
-    var caption: some View {
-        VStack(alignment: .leading, spacing: 3) {
-            Text(purpose)
-            Text("Optional. \(source)").foregroundStyle(.secondary)
-        }
-    }
-}
-
-/// Google, TfL, the alerts server and the Transitous contact, as Form sections.
+/// Select a service before showing its credentials.
 struct ConnectionSections: View {
     @Environment(AppSettings.self) private var settings
+    @Environment(AlertStore.self) private var alerts
     var draft: AlertServerDraft
     var focus: FocusState<String?>.Binding
-    var showsHelp = true
 
     var body: some View {
         @Bindable var settings = settings
-        Section {
-            KeyField(title: SetupItem.google.title, text: $settings.googleKeyOverride, hasBuiltIn: settings.hasBuiltInGoogleKey, focus: focus)
-        } footer: { if showsHelp { SetupItem.google.caption } }
-
-        Section {
-            KeyField(title: SetupItem.tfl.title, text: $settings.tflKeyOverride, hasBuiltIn: settings.hasBuiltInTfLKey, focus: focus)
-        } footer: { if showsHelp { SetupItem.tfl.caption } }
-
-        AlertServerSection(draft: draft, focus: focus, showsHelp: showsHelp)
-
-        Section {
-            VStack(alignment: .leading, spacing: 4) {
-                TextField(SetupItem.contact.title, text: $settings.contactOverride, prompt: Text("you@example.com or a web address"))
-                    .focused(focus, equals: "contact")
-                    .keyboardType(.emailAddress)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                let typed = settings.contactOverride.trimmingCharacters(in: .whitespaces)
-                if !typed.isEmpty, Contact.valid(typed) == nil {
-                    Text("Not an email or web address, so the build's default is used.").font(.caption).foregroundStyle(Theme.warning)
+        NavigationLink {
+            Form {
+                Section("Google Routes API key") {
+                    KeyField(title: "API key", text: $settings.googleKeyOverride,
+                             hasBuiltIn: settings.hasBuiltInGoogleKey, focus: focus)
+                    Link("Get a Routes API key", destination: URL(string: "https://console.cloud.google.com/apis/library/routes.googleapis.com")!)
+                }
+                Section("Requests this month") {
+                    let used = GoogleUsage.shared.allowance.usedThisMonth(now: .now)
+                    let cap = GoogleAllowance.monthlyCap
+                    LabeledContent("Google Routes", value: "\(used.formatted()) / \(cap.formatted())")
+                    ProgressView(value: Double(min(used, cap)), total: Double(cap))
+                        .accessibilityHidden(true)
                 }
             }
-        } header: {
-            Text(SetupItem.contact.title)
-        } footer: { if showsHelp { SetupItem.contact.caption } }
+            .navigationTitle("Google Routes")
+            .keepsSheetWhenUnfolded(true)
+        } label: {
+            service("Google Routes", symbol: "point.topleft.down.to.point.bottomright.curvepath",
+                    configured: !settings.googleKeyOverride.isEmpty || settings.hasBuiltInGoogleKey)
+        }
+        NavigationLink {
+            Form {
+                Section("TfL app key") {
+                    KeyField(title: "App key", text: $settings.tflKeyOverride, hasBuiltIn: settings.hasBuiltInTfLKey, focus: focus)
+                    Link("Get a TfL key", destination: URL(string: "https://api-portal.tfl.gov.uk/")!)
+                }
+            }
+            .navigationTitle("Transport for London")
+            .keepsSheetWhenUnfolded(true)
+        } label: {
+            service("TfL key", symbol: "tram.fill", configured: !settings.tflKeyOverride.isEmpty || settings.hasBuiltInTfLKey)
+        }
+        NavigationLink {
+            Form { AlertServerSection(draft: draft, focus: focus) }
+                .navigationTitle("Alerts server")
+                .keepsSheetWhenUnfolded(true)
+        } label: {
+            service("Alerts server", symbol: "bell.badge", configured: alerts.isConfigured)
+        }
+        NavigationLink {
+            Form {
+                Section("Email or web address") {
+                    TextField("Transitous contact", text: $settings.contactOverride, prompt: Text("you@example.com"))
+                        .focused(focus, equals: "contact")
+                        .keyboardType(.emailAddress)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                    if !settings.contactOverride.isEmpty, Contact.valid(settings.contactOverride) == nil {
+                        Label("Enter a valid email or URL", systemImage: "exclamationmark.circle").foregroundStyle(Theme.warning)
+                    }
+                }
+            }
+            .navigationTitle("Transitous contact")
+            .keepsSheetWhenUnfolded(true)
+        } label: {
+            service("Transitous contact", symbol: "at", configured: Contact.valid(settings.contactOverride) != nil)
+        }
+    }
+
+    private func service(_ title: String, symbol: String, configured: Bool) -> some View {
+        HStack {
+            Label(title, systemImage: symbol)
+            Spacer()
+            if configured {
+                Image(systemName: "checkmark.circle.fill").foregroundStyle(Theme.live)
+                    .accessibilityLabel("Configured")
+            }
+        }
     }
 }
 
@@ -96,7 +96,7 @@ struct KeyField: View {
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
             if text.isEmpty {
-                Text(hasBuiltIn ? "Using the key built into this app" : "Not set")
+                Text(hasBuiltIn ? "Built-in key" : "Not set")
                     .font(.caption)
                     .foregroundStyle(hasBuiltIn ? Theme.live : .secondary)
             }
@@ -196,9 +196,7 @@ struct AlertServerSection: View {
                 .submitLabel(.next)
                 .onSubmit { focus.wrappedValue = Self.tokenField }
         } header: {
-            Text(SetupItem.alerts.title)
-        } footer: {
-            if showsHelp { SetupItem.alerts.caption }
+            Text("Server address")
         }
         // The token in a section of its own: a SecureField in the same group as an address is
         // taken for a login, and iOS offers to save the pair as a password.
@@ -229,16 +227,19 @@ struct AlertServerSection: View {
             VStack(alignment: .leading, spacing: 6) {
                 if let problem = draft.problem { Text(problem).foregroundStyle(Theme.warning) }
                 if let note = draft.note { Text(note).foregroundStyle(Theme.warning) }
-                Text(summary)
+                Label(summary, systemImage: store.isConfigured ? "checkmark.circle" : "antenna.radiowaves.left.and.right.slash")
+                if showsHelp {
+                    Link("Server setup guide", destination: URL(string: "https://github.com/minhazk/Beeline#run-your-own-alerts-server")!)
+                }
             }
         }
     }
 
     private var summary: String {
         switch store.server {
-        case let server? where server.isBuiltIn: "Using the built-in server."
-        case let server?: "Using \(server.label)."
-        case nil: "Alerts are off until a server is set."
+        case let server? where server.isBuiltIn: "Built-in server"
+        case let server?: "Connected to \(server.label)"
+        case nil: "Server disconnected"
         }
     }
 }

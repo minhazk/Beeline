@@ -28,7 +28,7 @@ struct JourneySheet: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
+            VStack(alignment: .leading, spacing: 14) {
                 if let trip {
                     LiveGuide(trip: trip, onSettings: { showSettings = true }, onEnd: end)
                 } else {
@@ -36,7 +36,7 @@ struct JourneySheet: View {
                 }
                 Itinerary(journey: journey, query: query, trip: trip, boardLeg: $boardLeg)
                 if trip == nil {
-                    foundBy
+                    if !journey.providers.isEmpty { foundBy }
                     OpenInRow(query: query)
                 }
             }
@@ -124,29 +124,20 @@ struct JourneySheet: View {
     }
 
     private var header: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            VStack(alignment: .leading, spacing: 4) {
-                HStack(alignment: router.foldY != nil ? .center : .firstTextBaseline, spacing: 12) {
-                    Text(journey.duration.minutesText)
-                        .font(.largeTitle.weight(.semibold))
-                        .monospacedDigit()
-                    // Turned tall on a Duo the sheet rests at 210 pt under a tall map: the whole
-                    // trip at a glance beside its time, in room the phone doesn't have, with Go
-                    // still in view below.
-                    if router.foldY != nil { LegStrip(legs: journey.legs) }
-                    Spacer(minLength: 0)
-                    if let fare = journey.fare { Text(fare).font(.title3).foregroundStyle(.secondary) }
+        VStack(alignment: .leading, spacing: 10) {
+            VStack(alignment: .leading, spacing: 6) {
+                ViewThatFits(in: .horizontal) {
+                    HStack(alignment: .firstTextBaseline, spacing: 12) {
+                        duration.fixedSize()
+                        Spacer(minLength: 0)
+                        timing(alignment: .trailing).fixedSize()
+                    }
+                    VStack(alignment: .leading, spacing: 4) {
+                        duration
+                        timing(alignment: .leading)
+                    }
                 }
-                Text(summary)
-                    .font(.subheadline)
-                    .monospacedDigit()
-                    .foregroundStyle(.secondary)
-                TimelineView(.periodic(from: .now, by: 20)) { context in
-                    Label(leaveText(context.date), systemImage: "clock")
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(leaveIsUrgent(context.date) ? Theme.warning : Theme.ink)
-                }
-                .padding(.top, 2)
+                RouteMetrics(journey: journey)
             }
             .accessibilityElement(children: .combine)
 
@@ -156,7 +147,7 @@ struct JourneySheet: View {
                 Button(action: start) {
                     Label("Go", systemImage: "location.north.fill")
                         .font(.headline)
-                        .frame(maxWidth: .infinity, minHeight: 36)
+                        .frame(maxWidth: .infinity, minHeight: 44)
                 }
                 .buttonStyle(.glassProminent)
                 .tint(Theme.tint)
@@ -166,25 +157,45 @@ struct JourneySheet: View {
                     Label("Share", systemImage: "square.and.arrow.up")
                         .font(.headline)
                         .lineLimit(1)
-                        .frame(maxWidth: typeSize.isAccessibilitySize ? .infinity : nil, minHeight: 36)
+                        .frame(maxWidth: typeSize.isAccessibilitySize ? .infinity : nil, minHeight: 44)
                 }
                 .buttonStyle(.bordered)
                 .tint(Theme.tint)
             }
+            if !router.sheetIsShallow || router.foldY != nil { LegStrip(legs: journey.legs) }
         }
     }
 
-    private var summary: String {
-        let changes = journey.changes == 0 ? "Direct" : "\(journey.changes) change\(journey.changes == 1 ? "" : "s")"
-        return "\(journey.departure.clock) – \(journey.arrival.clock) · \(changes) · \(Int((journey.walkingTime / 60).rounded())) min walk"
+    private var duration: some View {
+        Text(journey.duration.minutesText)
+            .font(router.sheetIsShallow ? .title2.bold() : .largeTitle.bold())
+            .monospacedDigit()
+    }
+
+    private func timing(alignment: HorizontalAlignment) -> some View {
+        VStack(alignment: alignment, spacing: 3) {
+            HStack(spacing: 6) {
+                if journey.isRealtime { LiveDot() }
+                JourneyTimeSpan(journey: journey)
+                    .font(.subheadline.weight(.semibold))
+            }
+            TimelineView(.periodic(from: .now, by: 20)) { context in
+                Label(leaveText(context.date), systemImage: "clock")
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(leaveIsUrgent(context.date) ? Theme.warning : Color.secondary)
+            }
+        }
     }
 
     private func leaveText(_ now: Date) -> String {
         let minutes = Int((journey.departure.timeIntervalSince(now) / 60).rounded(.down))
-        if minutes >= 60 { return "Leave at \(journey.departure.clock)" }
+        if minutes >= 60 {
+            if Calendar.current.isDateInToday(journey.departure) { return "Leaves today" }
+            return "Leaves \(journey.departure.formatted(.dateTime.month(.abbreviated).day()))"
+        }
         if minutes >= 1 { return "Leave in \(minutes) min" }
         if minutes >= -1 { return "Leave now" }
-        return "Was due to leave at \(journey.departure.clock)"
+        return "Past departure time"
     }
 
     private func leaveIsUrgent(_ now: Date) -> Bool {
@@ -199,20 +210,33 @@ struct JourneySheet: View {
     }
 
     private var foundBy: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Found by").font(.footnote.weight(.semibold)).foregroundStyle(.secondary)
-            ForEach(journey.providers, id: \.self) { provider in
-                HStack(spacing: 8) {
-                    Circle().fill(Theme.color(provider)).frame(width: 7, height: 7)
-                    Text(provider.name).font(.subheadline.weight(.medium))
-                    Text(journey.sources.filter { $0.provider == provider }.map(\.variant).joined(separator: ", "))
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
+        DisclosureGroup {
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach(journey.providers, id: \.self) { provider in
+                    Label {
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(provider.name).font(.subheadline.weight(.medium))
+                            Text(journey.sources.filter { $0.provider == provider }.map(\.variant).joined(separator: ", "))
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                        }
+                    } icon: {
+                        Circle().fill(Theme.color(provider)).frame(width: 7, height: 7)
+                    }
                 }
             }
+            .padding(.bottom, 10)
+        } label: {
+            HStack(spacing: 8) {
+                Text("Route sources").font(.footnote.weight(.semibold))
+                if !typeSize.isAccessibilitySize {
+                    ForEach(journey.providers, id: \.self) { SourceBadge(provider: $0) }
+                }
+            }
+            .frame(minHeight: 44)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 4)
+        .padding(.horizontal, 12)
+        .surface()
     }
 
     private func start() {
@@ -289,7 +313,7 @@ struct Itinerary: View {
                 }
             }
         }
-        .padding(16)
+        .padding(12)
         .surface()
     }
 
@@ -338,6 +362,7 @@ private struct LegRow: View {
     @Environment(MapScene.self) private var scene
     @Environment(Router.self) private var router
     @Environment(\.dynamicTypeSize) private var typeSize
+    @ScaledMetric(relativeTo: .subheadline) private var timeWidth: CGFloat = 46
     @SwiftUI.State private var showDirections = false
     @SwiftUI.State private var showStops = false
     @SwiftUI.State private var directions: Loadable<WalkRoute>?
@@ -350,32 +375,16 @@ private struct LegRow: View {
     }
 
     var body: some View {
-        HStack(alignment: .top, spacing: 12) {
+        HStack(alignment: .top, spacing: 8) {
             if !typeSize.isAccessibilitySize {
                 Text(departure.clock)
                     .font(.subheadline.weight(.semibold).monospacedDigit())
-                    .frame(width: 46, alignment: .leading)
+                    .frame(width: timeWidth, alignment: .leading)
                     .padding(.top, 1)
             }
             rail
-            VStack(alignment: .leading, spacing: 8) {
-                Button(action: onSelect) {
-                    VStack(alignment: .leading, spacing: 4) {
-                        HStack(alignment: .firstTextBaseline, spacing: 6) {
-                            Text(typeSize.isAccessibilitySize ? "\(departure.clock) \(fromName)" : fromName)
-                                .font(.subheadline.weight(.semibold))
-                            if state == .current {
-                                Text("Now").font(.caption.weight(.bold)).foregroundStyle(Theme.tint)
-                            }
-                        }
-                        if leg.mode.isTransit { transitTitle } else { walkTitle }
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .contentShape(.rect)
-                }
-                .buttonStyle(.plain)
-                .accessibilityHint(state == .planned ? "Shows this part on the map" : "")
-
+            VStack(alignment: .leading, spacing: 6) {
+                legHeading
                 if leg.mode.isTransit { transitDetail } else { walkDetail }
 
                 if isLast {
@@ -387,11 +396,38 @@ private struct LegRow: View {
                     .padding(.top, 8)
                 }
             }
-            .padding(.bottom, isLast ? 0 : 20)
-            Spacer(minLength: 0)
+            .padding(.bottom, isLast ? 0 : 16)
         }
         .opacity(state == .done ? 0.45 : 1)
         .fixedSize(horizontal: false, vertical: true)
+    }
+
+    private var legHeading: some View {
+        Button(action: onSelect) {
+            HStack(alignment: .top, spacing: 8) {
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(alignment: .firstTextBaseline, spacing: 6) {
+                        Text(typeSize.isAccessibilitySize ? "\(departure.clock) \(fromName)" : fromName)
+                            .font(.subheadline.weight(.semibold))
+                            .fixedSize(horizontal: false, vertical: true)
+                        if state == .current {
+                            Text("Now").font(.caption.weight(.bold)).foregroundStyle(Theme.tint)
+                        }
+                    }
+                    if leg.mode.isTransit { transitTitle } else { walkTitle }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                Image(systemName: "map")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(Theme.tint)
+                    .accessibilityHidden(true)
+            }
+            .multilineTextAlignment(.leading)
+            .frame(minHeight: 44, alignment: .topLeading)
+            .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .accessibilityHint(router.trip == nil ? "Shows this leg on the map" : "Selects this leg")
     }
 
     private var fromName: String {
@@ -420,7 +456,7 @@ private struct LegRow: View {
     // MARK: Walks
 
     private var walkTitle: some View {
-        HStack(spacing: 8) {
+        FlowLayout(spacing: 8) {
             Label("Walk \(leg.duration.minutesText)", systemImage: "figure.walk")
             if let metres = leg.distanceMeters, metres > 0 { Text(LiveTrip.distanceText(metres)) }
         }
@@ -433,8 +469,10 @@ private struct LegRow: View {
             Button {
                 withAnimation(.snappy) { showDirections.toggle() }
             } label: {
-                Label(showDirections ? "Hide directions" : "Directions", systemImage: "arrow.turn.up.right")
+                Label(showDirections ? "Hide directions" : "Walking directions", systemImage: "arrow.turn.up.right")
                     .font(.footnote.weight(.semibold))
+                    .frame(minHeight: 44)
+                    .contentShape(.rect)
             }
             .buttonStyle(.borderless)
             .task(id: showDirections) {
@@ -452,24 +490,15 @@ private struct LegRow: View {
 
     @ViewBuilder private var transitTitle: some View {
         let direction = leg.headsign.map { $0.lowercased().hasPrefix("via") ? $0 : "towards \($0)" }
-        Group {
-            if router.isNarrow {
-                // Under 400 pt the line's name stays whole, and the direction goes under it if
-                // the two don't fit on one line.
-                ViewThatFits(in: .horizontal) {
-                    HStack(spacing: 8) {
-                        LinePill(leg: leg, compact: true).fixedSize()
-                        if let direction { Text(direction).lineLimit(1).fixedSize() }
-                    }
-                    VStack(alignment: .leading, spacing: 3) {
-                        LinePill(leg: leg, compact: true).fixedSize()
-                        if let direction { Text(direction).lineLimit(2).fixedSize(horizontal: false, vertical: true) }
-                    }
-                }
-            } else {
-                HStack(spacing: 8) {
-                    LinePill(leg: leg, compact: true)
-                    if let direction { Text(direction).lineLimit(1) }
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 8) {
+                LinePill(leg: leg, compact: true).fixedSize()
+                if let direction { Text(direction).fixedSize() }
+            }
+            VStack(alignment: .leading, spacing: 3) {
+                LinePill(leg: leg, compact: true)
+                if let direction {
+                    Text(direction).lineLimit(typeSize.isAccessibilitySize ? nil : 2)
                 }
             }
         }
@@ -483,12 +512,12 @@ private struct LegRow: View {
         if let walk = walkInstead {
             let bus = leg.arrival.timeIntervalSince(min(atStop, leg.departure))
             if walk <= bus + 120 {
-                Label(walk < bus - 120 ? "Walking is quicker: \(walk.minutesText)" : "Walking is about as quick: \(walk.minutesText)",
+                Label(walk < bus - 120 ? "Walk \(walk.minutesText) · quicker" : "Walk \(walk.minutesText) · similar time",
                       systemImage: "figure.walk")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(Theme.tint)
             } else {
-                Label("Or walk it in \(walk.minutesText)", systemImage: "figure.walk")
+                Label("Or walk \(walk.minutesText)", systemImage: "figure.walk")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -502,29 +531,22 @@ private struct LegRow: View {
     }
 
     @ViewBuilder private var transitDetail: some View {
+        rideFacts.task(id: leg.id) { await loadWalkInstead() }
+        if showStops {
+            VStack(alignment: .leading, spacing: 6) {
+                ForEach(Array(leg.intermediateStops.enumerated()), id: \.offset) { _, stop in
+                    Label(stop, systemImage: "circle")
+                        .imageScale(.small)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .padding(.vertical, 4)
+        }
         ForEach(notices, id: \.displayID) { notice in
             AlertLine(alert: ServiceAlert(header: notice.title, detail: notice.detail.isEmpty ? nil : notice.detail),
                       minor: notice.severity == .minor)
         }
-        let info = [leg.stopCount.map { "\($0) stop\($0 == 1 ? "" : "s")" }, leg.duration.minutesText].compactMap { $0 }
-        Button {
-            if !leg.intermediateStops.isEmpty { withAnimation(.snappy) { showStops.toggle() } }
-        } label: {
-            HStack(spacing: 6) {
-                // The platform up front, in ink: it decides where you stand.
-                if let platform, state != .done { PlatformTag(text: leg.standing(at: platform)) }
-                Text(info.joined(separator: " · "))
-                if !leg.intermediateStops.isEmpty {
-                    Image(systemName: "chevron.down").imageScale(.small).rotationEffect(.degrees(showStops ? 180 : 0))
-                }
-                if leg.isRealtime { LiveDot() }
-            }
-            .font(.caption)
-            .foregroundStyle(.secondary)
-        }
-        .buttonStyle(.plain)
-        .disabled(leg.intermediateStops.isEmpty)
-        .task(id: leg.id) { await loadWalkInstead() }
         walkAlternative
         // During Go the guide above says this, for the ride that matters.
         if state != .done, router.trip == nil, let watch = BusWatch(leg: leg) {
@@ -535,28 +557,22 @@ private struct LegRow: View {
                     scene.focus(leg)
                     router.settle(.medium)
                 } label: {
-                    Label("Where are the buses?", systemImage: "bus")
+                    Label("Live buses", systemImage: "bus")
                         .font(.footnote.weight(.semibold))
+                        .frame(minHeight: 44)
+                        .contentShape(.rect)
                 }
                 .buttonStyle(.borderless)
                 .accessibilityHint("Shows the buses on this route live on the map")
             }
         }
-        if showStops {
-            VStack(alignment: .leading, spacing: 4) {
-                ForEach(Array(leg.intermediateStops.enumerated()), id: \.offset) { _, stop in
-                    Text(stop).font(.caption).foregroundStyle(.secondary)
-                }
-            }
-            .padding(.leading, 2)
-        }
         if state != .done, !isAboard {
             Group {
                 if router.isPane {
-                    Button(action: onBoard) { DepartureStrip(leg: leg, state: tripBoard.map { .loaded($0) } ?? departures.board(leg), reachable: reachable) }
+                    Button(action: onBoard) { departurePreview }
                 } else {
                     NavigationLink(value: Page.board(leg)) {
-                        DepartureStrip(leg: leg, state: tripBoard.map { .loaded($0) } ?? departures.board(leg), reachable: reachable)
+                        departurePreview
                     }
                 }
             }
@@ -567,6 +583,47 @@ private struct LegRow: View {
                 AlertLine(alert: alert)
             }
         }
+    }
+
+    private var rideFacts: some View {
+        FlowLayout(spacing: 8) {
+            if let platform, state != .done { PlatformTag(text: leg.standing(at: platform)) }
+            Text(leg.duration.minutesText).monospacedDigit()
+            if leg.isRealtime { LiveDot() }
+            let stopCount = leg.stopCount.map { "\($0) stop\($0 == 1 ? "" : "s")" }
+            if leg.intermediateStops.isEmpty {
+                if let stopCount { Text(stopCount) }
+            } else {
+                Button {
+                    withAnimation(.snappy) { showStops.toggle() }
+                } label: {
+                    HStack(spacing: 4) {
+                        Text(stopCount ?? "Stops")
+                        Image(systemName: "chevron.down")
+                            .imageScale(.small)
+                            .rotationEffect(.degrees(showStops ? 180 : 0))
+                            .accessibilityHidden(true)
+                    }
+                    .fontWeight(.semibold)
+                    .foregroundStyle(Theme.tint)
+                    .frame(minWidth: 44, minHeight: 44)
+                    .contentShape(.rect)
+                }
+                .buttonStyle(.plain)
+                .accessibilityHint(showStops ? "Hides intermediate stops" : "Shows intermediate stops")
+            }
+        }
+        .font(.footnote)
+        .foregroundStyle(.secondary)
+    }
+
+    private var departurePreview: some View {
+        DepartureStrip(leg: leg, state: tripBoard.map { .loaded($0) } ?? departures.board(leg), reachable: reachable)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 6)
+            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+            .background(Theme.ink.opacity(0.045), in: .rect(cornerRadius: 10))
+            .contentShape(.rect)
     }
 }
 
@@ -633,25 +690,42 @@ struct AlertLine: View {
     @State private var expanded = false
 
     var body: some View {
-        Button {
-            withAnimation(.snappy) { expanded.toggle() }
-        } label: {
-            HStack(alignment: .firstTextBaseline, spacing: 6) {
-                Image(systemName: minor ? "info.circle" : "exclamationmark.triangle.fill")
-                    .foregroundStyle(minor ? AnyShapeStyle(.secondary) : AnyShapeStyle(Theme.warning))
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(alert.header).font(.caption.weight(.semibold))
-                    if expanded, let detail = alert.detail {
-                        Text(detail).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-                    }
+        if let detail = alert.detail, !detail.isEmpty {
+            Button {
+                withAnimation(.snappy) { expanded.toggle() }
+            } label: {
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    message(detail: expanded ? detail : nil)
+                    Image(systemName: "chevron.down")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(Theme.tint)
+                        .rotationEffect(.degrees(expanded ? 180 : 0))
+                        .accessibilityHidden(true)
                 }
-                Spacer(minLength: 0)
+                .frame(minHeight: 44)
+                .contentShape(.rect)
             }
-            .multilineTextAlignment(.leading)
-            .contentShape(.rect)
+            .buttonStyle(.plain)
+            .accessibilityHint(expanded ? "Hides the full message" : "Shows the full message")
+        } else {
+            message(detail: nil)
         }
-        .buttonStyle(.plain)
-        .accessibilityHint(expanded ? "" : "Shows the full message")
+    }
+
+    private func message(detail: String?) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            Image(systemName: minor ? "info.circle" : "exclamationmark.triangle.fill")
+                .foregroundStyle(minor ? AnyShapeStyle(.secondary) : AnyShapeStyle(Theme.warning))
+                .accessibilityLabel(minor ? "Service information" : "Service warning")
+            VStack(alignment: .leading, spacing: 2) {
+                Text(alert.header).fontWeight(.semibold)
+                if let detail { Text(detail).foregroundStyle(.secondary) }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .fixedSize(horizontal: false, vertical: true)
+        }
+        .font(.caption)
+        .multilineTextAlignment(.leading)
     }
 }
 

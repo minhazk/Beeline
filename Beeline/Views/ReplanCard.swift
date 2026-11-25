@@ -1,77 +1,68 @@
 import SwiftUI
 
-/// Re-planning in Go's sheet: a plain line when the trip has changed under you (an earlier
-/// Jubilee, a long wait for the 277), or an offer of a faster way with Switch and Keep.
+/// A faster route leads with the time it saves. The full comparison is available
+/// before switching, including what prompted the search.
 struct ReplanCard: View {
     enum Model {
-        case offer(Replan.Message, journey: Journey)
+        case offer(Replan.Message, Replan.Offer)
         case status(Replan.Message, symbol: String)
-        /// "Find a faster way", running: the star fills in as it does while a search runs.
         case looking(String)
     }
 
     var model: Model
-    /// At Go's low rest: the offer as one row (gain, time, Switch), so it's whole there too.
     var compact = false
     var onSwitch: () -> Void = {}
     var onKeep: () -> Void = {}
+    @Environment(\.dynamicTypeSize) private var typeSize
 
     var body: some View {
         switch model {
-        case .offer(let message, _) where compact:
-            HStack(spacing: 10) {
-                FractalStar(size: 20)
-                Text(message.compact)
-                    .font(.subheadline.weight(.semibold))
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.8)
-                    .accessibilityLabel(message.short)
-                Spacer(minLength: 0)
-                Button("Keep my route", systemImage: "xmark", action: onKeep)
-                    .labelStyle(.iconOnly)
-                    .font(.subheadline.weight(.semibold))
-                    .frame(width: 44, height: 44)
-                    .foregroundStyle(.secondary)
-                Button(action: onSwitch) {
-                    Text("Switch").font(.subheadline.weight(.semibold)).padding(.horizontal, 6).frame(minHeight: 32)
+        case .offer(let message, let offer):
+            if compact && !typeSize.isAccessibilitySize {
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(spacing: 8) {
+                        gain(message)
+                        Spacer(minLength: 0)
+                        switchButton(offer)
+                        Button(action: onKeep) {
+                            Text("Keep").font(.subheadline.weight(.semibold))
+                                .frame(minWidth: 44, minHeight: 44)
+                                .contentShape(.rect)
+                        }
+                        .accessibilityLabel("Keep my route")
+                    }
+                    if !offer.statusChecked { statusWarning }
                 }
-                .buttonStyle(.borderedProminent)
+            } else {
+                VStack(alignment: .leading, spacing: 6) {
+                    gain(message)
+                    Text(message.title).font(.subheadline)
+                    LegStrip(legs: offer.journey.legs)
+                    if !offer.statusChecked { statusWarning }
+                    let layout = typeSize.isAccessibilitySize
+                        ? AnyLayout(VStackLayout(alignment: .leading))
+                        : AnyLayout(HStackLayout(spacing: 12))
+                    layout {
+                        switchButton(offer)
+                        Button(action: onKeep) {
+                            Text("Keep my route").font(.subheadline.weight(.semibold))
+                                .frame(minHeight: 44)
+                                .contentShape(.rect)
+                        }
+                        .buttonStyle(.borderless)
+                    }
+                    DisclosureGroup {
+                        Text(message.detail)
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    } label: {
+                        Text("Why this route?").font(.footnote.weight(.medium)).frame(minHeight: 44)
+                    }
+                    .id(offer.journey.id)
+                }
                 .tint(Theme.tint)
             }
-            .padding(.leading, 14)
-            .padding(.trailing, 10)
-            .padding(.vertical, 6)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .surface(highlighted: true)
-        case .offer(let message, let journey):
-            VStack(alignment: .leading, spacing: 10) {
-                HStack(alignment: .center, spacing: 8) {
-                    // The star marks the best way, as it does on the routes list.
-                    FractalStar(size: 20)
-                    Text(message.title).font(.headline)
-                }
-                LegStrip(legs: journey.legs)
-                Text(message.detail)
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                HStack(spacing: 10) {
-                    Button(action: onSwitch) {
-                        Text("Switch").font(.subheadline.weight(.semibold)).frame(maxWidth: .infinity, minHeight: 32)
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .tint(Theme.tint)
-                    .accessibilityHint("Go follows the new way from \(journey.legs.first?.fromName ?? "the next stop")")
-                    Button(action: onKeep) {
-                        Text("Keep my route").font(.subheadline.weight(.semibold)).frame(maxWidth: .infinity, minHeight: 32)
-                    }
-                    .buttonStyle(.bordered)
-                    .tint(Theme.ink)
-                }
-            }
-            .padding(14)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .surface(highlighted: true)
         case .status(let message, let symbol):
             Label {
                 VStack(alignment: .leading, spacing: 2) {
@@ -81,18 +72,37 @@ struct ReplanCard: View {
             } icon: {
                 Image(systemName: symbol).foregroundStyle(Theme.tint)
             }
-            .padding(14)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .surface()
+            .accessibilityElement(children: .combine)
         case .looking(let text):
-            Label {
-                Text(text).font(.subheadline.weight(.semibold))
-            } icon: {
-                FractalStar(size: 20, lit: [true, false, true, false])
+            HStack(spacing: 8) {
+                ProgressView().controlSize(.small)
+                Text(text).font(.subheadline).foregroundStyle(.secondary)
             }
-            .padding(14)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .surface()
+            .accessibilityElement(children: .combine)
         }
+    }
+
+    private func gain(_ message: Replan.Message) -> some View {
+        Label {
+            Text(message.compact).font(.headline).monospacedDigit()
+        } icon: {
+            Image(systemName: "arrow.triangle.branch").foregroundStyle(Theme.tint)
+        }
+        .accessibilityLabel(message.short)
+    }
+
+    private var statusWarning: some View {
+        Label("Line status unconfirmed", systemImage: "exclamationmark.triangle")
+            .font(.footnote).foregroundStyle(Theme.warning)
+    }
+
+    private func switchButton(_ offer: Replan.Offer) -> some View {
+        Button(action: onSwitch) {
+            Text("Switch").font(.subheadline.weight(.semibold)).padding(.horizontal, 6).frame(minHeight: 32)
+        }
+        .buttonStyle(.borderedProminent)
+        .buttonBorderShape(.capsule)
+        .tint(Theme.tint)
+        .accessibilityHint("Go follows the new route from \(offer.origin.name)")
     }
 }

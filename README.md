@@ -39,7 +39,7 @@ lines fold into one card ("Or leave at 15:08 or 15:18").
 (planned to the lowest cap, 1,000 requests). The phone counts every Google request
 in Google's own month (Pacific time, `GoogleUsage`): deep search asks all five ways
 under 700, one way under 900, and not at all past 900, when routes come from TfL and
-Transitous alone. The count shows under Sources in Settings.
+Transitous alone. The count is in Settings → Service connections → Google Routes.
 
 **Live map and Go.** Everything sits on one live map with a sheet over it, as in
 Apple and Google Maps, with your dot's beam showing which way the phone faces:
@@ -92,7 +92,7 @@ that gets on or off at a closed station, or rides a closed stretch, is flagged i
 orange and can't be "Best"; it goes under the others. What's reported shows at the
 top of the list, in TfL's own words, and on the leg it touches.
 
-**Line alerts.** Open Settings → Line alerts → Add line alert, or use the bell on a journey.
+**Line alerts.** Tap Alerts → Add a line on the home screen, or use the bell on a journey.
 Choose your line, boarding and exit stations, travel days, and times. Each time can have
 its own direction. You can save the schedule before connecting a notification server. A small
 Cloudflare Worker (`worker/`, which you host yourself: see below) checks TfL every two minutes
@@ -203,7 +203,7 @@ send notifications to your build of the app, and sign the app with the push enti
 7. `pnpm run deploy`. Check `https://<your worker>/health` says `{"ok":true,"pushes":true}`;
    `"pushes":false` means one of `APNS_KEY`, `APNS_KEY_ID`, `APNS_TEAM_ID` or `APNS_TOPIC` is
    missing, and until it's set the cron judges nothing, so no disruption is lost.
-8. Open Settings → Service connections. Enter the server address and **that phone’s invitation**,
+8. Open Settings → Service connections → Alerts server. Enter the server address and **that phone’s invitation**,
    then tap Use this server. Under Line alerts, save an alert, allow notifications, and choose Send a test notification.
 
 Each invitation admits one new phone at a time. Existing installations from earlier versions
