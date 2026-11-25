@@ -3,8 +3,6 @@ import SwiftUI
 /// Select a service before showing its credentials.
 struct ConnectionSections: View {
     @Environment(AppSettings.self) private var settings
-    @Environment(AlertStore.self) private var alerts
-    var draft: AlertServerDraft
     var focus: FocusState<String?>.Binding
 
     var body: some View {
@@ -41,31 +39,6 @@ struct ConnectionSections: View {
             .keepsSheetWhenUnfolded(true)
         } label: {
             service("TfL key", symbol: "tram.fill", configured: !settings.tflKeyOverride.isEmpty || settings.hasBuiltInTfLKey)
-        }
-        NavigationLink {
-            Form { AlertServerSection(draft: draft, focus: focus) }
-                .navigationTitle("Alerts server")
-                .keepsSheetWhenUnfolded(true)
-        } label: {
-            service("Alerts server", symbol: "bell.badge", configured: alerts.isConfigured)
-        }
-        NavigationLink {
-            Form {
-                Section("Email or web address") {
-                    TextField("Transitous contact", text: $settings.contactOverride, prompt: Text("you@example.com"))
-                        .focused(focus, equals: "contact")
-                        .keyboardType(.emailAddress)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                    if !settings.contactOverride.isEmpty, Contact.valid(settings.contactOverride) == nil {
-                        Label("Enter a valid email or URL", systemImage: "exclamationmark.circle").foregroundStyle(Theme.warning)
-                    }
-                }
-            }
-            .navigationTitle("Transitous contact")
-            .keepsSheetWhenUnfolded(true)
-        } label: {
-            service("Transitous contact", symbol: "at", configured: Contact.valid(settings.contactOverride) != nil)
         }
     }
 
@@ -104,8 +77,7 @@ struct KeyField: View {
     }
 }
 
-/// The alerts server's fields as typed: a draft until "Use this server" (or the setup step's
-/// final button) applies it. Leaving the screen without applying keeps the server in use as it was.
+/// Keeps edits separate from the active alerts connection until the user applies them.
 @MainActor @Observable
 final class AlertServerDraft {
     var url = "" {
@@ -140,13 +112,6 @@ final class AlertServerDraft {
         if typed != store.enteredURL { return true }
         guard !typed.isEmpty else { return false }
         return token.trimmingCharacters(in: .whitespacesAndNewlines) != (store.server?.token ?? "")
-    }
-
-    /// An address that passes and a token, differing from what's in use.
-    func isCompleteChange(from store: AlertStore) -> Bool {
-        let typed = url.trimmingCharacters(in: .whitespacesAndNewlines)
-        return changed(from: store) && !typed.isEmpty && (try? AlertServer.address(typed)) != nil
-            && !token.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     /// Applies the draft (an empty address goes back to the built-in server or none). True

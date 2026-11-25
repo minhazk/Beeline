@@ -29,8 +29,6 @@ final class AppSettings {
     /// Written only when changed here, never while being read in (`loading`).
     var googleKeyOverride: String { didSet { if !loading { Keychain.set(googleKeyOverride, for: "google") } } }
     var tflKeyOverride: String { didSet { if !loading { Keychain.set(tflKeyOverride, for: "tfl") } } }
-    /// Who Transitous can reach about this install's requests (User-Agent); blank is the build's.
-    var contactOverride: String { didSet { if !loading { Keychain.set(contactOverride, for: "contact") } } }
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
@@ -40,7 +38,6 @@ final class AppSettings {
         routeFilter = defaults.data(forKey: "routeFilter").flatMap { try? JSONDecoder().decode(RouteFilter.self, from: $0) } ?? RouteFilter()
         googleKeyOverride = ""
         tflKeyOverride = ""
-        contactOverride = ""
         loadKeys()
         // A launch in the background before the first unlock can't read them yet: again once it can.
         NotificationCenter.default.addObserver(forName: UIApplication.protectedDataDidBecomeAvailableNotification, object: nil, queue: .main) { [weak self] _ in
@@ -59,8 +56,7 @@ final class AppSettings {
         defer { loading = false }
         var pending = false
         for (account, apply) in [("google", { (v: String) in self.googleKeyOverride = v }),
-                                 ("tfl", { (v: String) in self.tflKeyOverride = v }),
-                                 ("contact", { (v: String) in self.contactOverride = v })] {
+                                 ("tfl", { (v: String) in self.tflKeyOverride = v })] {
             switch Keychain.read(account) {
             case .value(let v): apply(v)
             case .notFound: apply("")

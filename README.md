@@ -145,8 +145,7 @@ behind availability checks. Generate the Xcode project from the checked-in proje
    If signing complains about them on a free account, delete those two keys from
    `Beeline/Resources/Beeline.entitlements` in your copy.
 4. TfL and Transitous requests identify Beeline with its public repository URL. Set
-   `BEELINE_CONTACT` to change that build-time contact. A personal contact entered in Settings
-   is sent only to Transitous.
+   `BEELINE_CONTACT` to change that build-time contact.
 
 `Config/Base.xcconfig` holds the defaults and includes your `Secrets.xcconfig` last, so
 anything you set there wins. In an xcconfig `//` starts a comment: write URLs as
@@ -203,7 +202,7 @@ send notifications to your build of the app, and sign the app with the push enti
 7. `pnpm run deploy`. Check `https://<your worker>/health` says `{"ok":true,"pushes":true}`;
    `"pushes":false` means one of `APNS_KEY`, `APNS_KEY_ID`, `APNS_TEAM_ID` or `APNS_TOPIC` is
    missing, and until it's set the cron judges nothing, so no disruption is lost.
-8. Open Settings → Service connections → Alerts server. Enter the server address and **that phone’s invitation**,
+8. Open Line alerts → Connect alerts server in a build without a configured service. Enter the server address and **that phone’s invitation**,
    then tap Use this server. Under Line alerts, save an alert, allow notifications, and choose Send a test notification.
 
 Each invitation admits one new phone at a time. Existing installations from earlier versions

@@ -64,13 +64,12 @@ enum HTTP {
         return "Beeline/\(version) (iOS transit app)"
     }()
 
-    static func userAgent(for url: URL?, transitousContact: @autoclosure () -> String? = Keychain.get("contact")) -> String {
+    static func userAgent(for url: URL?) -> String {
         guard let host = url?.host()?.lowercased(), ["api.transitous.org", "api.tfl.gov.uk"].contains(host) else {
             return appUserAgent
         }
-        let entered = host == "api.transitous.org" ? transitousContact().flatMap(Contact.valid) : nil
         let builtIn = Bundle.main.object(forInfoDictionaryKey: "BeelineContact") as? String
-        guard let contact = entered ?? builtIn.flatMap(Contact.valid) else { return appUserAgent }
+        guard let contact = builtIn.flatMap(Contact.valid) else { return appUserAgent }
         return "\(appUserAgent) (\(contact))"
     }
 
