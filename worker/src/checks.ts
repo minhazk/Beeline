@@ -6,7 +6,7 @@ import { loadLineMaps } from "./linemap.ts";
 import { issuesFor, issuesInRanges, linesToPlace, type LineMaps } from "./match.ts";
 import { MAX_RETRIES, plannedStep, step, type DeviceState, type Ways } from "./policy.ts";
 import { clearPush, issuesPush, plannedPush, probePush, strikePush, type Push } from "./push.ts";
-import { londonStrikes } from "./strikes.ts";
+import { londonStrikes, networkWide, type NetworkStrike } from "./strikes.ts";
 import { activeWindows, dateKey, during, eachWay, localTime, PLANNED_CHECK_AT, travelRanges } from "./schedule.ts";
 import { lineCatalog, lineChecks, stationChecks } from "./linechecks.ts";
 import type { LineStatus, StationDisruption } from "./tfl.ts";
@@ -466,8 +466,9 @@ export async function runChecks(given: Env, now = Date.now()): Promise<{ devices
               delete told[key];
             }
           }
-          for (const notice of strikes) {
-            if (stopped || halted) break;
+          /** Whether this phone has heard a notice, what it then still has to note, and how a
+           * delivery is remembered. */
+          const judge = (notice: NetworkStrike) => {
             const report = notice.liveReport;
             const rollingUntil = now + 3 * HOUR;
             const until = notice.active && notice.publishedStart === undefined ? rollingUntil : notice.expires + 86400_000;
@@ -477,17 +478,36 @@ export async function runChecks(given: Env, now = Date.now()): Promise<{ devices
               for (const alias of notice.aliases ?? []) told[alias] = notice.active ? rollingUntil : until;
             };
             // A line notice delivered since this period started also covers its onset.
-            const alreadyLive = report && told[report.key] >= report.from + 3 * HOUR;
+            const alreadyLive = !!report && told[report.key] >= report.from + 3 * HOUR;
             const aliasUntil = notice.active ? (notice.publishedStart ?? now) + 3 * HOUR : now;
-            const heardAlias = notice.aliases?.some(key => told[key] >= aliasUntil);
-            if (notice.occurrences.every(key => told[key]) || alreadyLive || heardAlias) {
-              const liveKeys = report ? [report.key] : notice.occurrences;
-              if (((alreadyLive || heardAlias) && !told[notice.key])
-                  || notice.aliases?.some(key => (told[key] ?? 0) < (notice.active ? now + HOUR : until))
-                  || (notice.active && liveKeys.some(key => (told[key] ?? 0) < now + HOUR))) remember();
+            const heardAlias = !!notice.aliases?.some(key => told[key] >= aliasUntil);
+            const heard = notice.occurrences.every(key => told[key]) || alreadyLive || heardAlias;
+            const liveKeys = report ? [report.key] : notice.occurrences;
+            const refresh = heard && (((alreadyLive || heardAlias) && !told[notice.key])
+              || !!notice.aliases?.some(key => (told[key] ?? 0) < (notice.active ? now + HOUR : until))
+              || (notice.active && liveKeys.some(key => (told[key] ?? 0) < now + HOUR)));
+            return { heard, refresh, remember };
+          };
+          // Dated periods of one strike on a whole network, first heard of together, are one
+          // notification ("17 + 19 Dec"); each still gets its own reminder and its own start.
+          const announces = (notice: NetworkStrike) => !notice.active && !notice.reminder && networkWide(notice.mode) && notice.from !== undefined && notice.to !== undefined;
+          const joined = new Set<NetworkStrike>();
+          for (const notice of strikes) {
+            if (stopped || halted) break;
+            if (joined.has(notice)) continue;
+            const { heard, refresh, remember } = judge(notice);
+            if (heard) {
+              if (refresh) remember();
               continue;
             }
-            await deliver(`strike:${notice.key}`, strikePush(notice, now), remember);
+            const together = announces(notice)
+              ? strikes.filter((other) => other !== notice && !joined.has(other) && announces(other) && other.strike === notice.strike && !judge(other).heard)
+              : [];
+            for (const other of together) joined.add(other);
+            await deliver(`strike:${notice.key}`, strikePush([notice, ...together], now), () => {
+              remember();
+              for (const other of together) judge(other).remember();
+            });
           }
         }
         // Forget alerts the phone no longer has.

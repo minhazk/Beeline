@@ -117,6 +117,18 @@ minor delays, quiet for "good service again". Planned works on tomorrow's trips 
 7 pm the evening before. One notification per disruption, again only if it gets worse.
 The home page shows each saved line's status.
 
+A line's notification is made to be read at a glance. It comes from the line itself: a disc in
+the line's colour with a train on it sits where the app icon would be (a tick once it runs
+again), the title is the line, and the body is a few words, not TfL's paragraph: how bad
+("Severe delays"), then the stretch TfL names ("Leytonstone → Hainault") or else why. TfL's
+own words are in Beeline, on the alert. The disc is drawn on the phone by a notification
+service extension (`BeelineNotifications`) from what the server sends; a build without the
+Communication Notifications entitlement shows the same words beside the app icon. With Next
+trains on Lock Screen on for that line, its Live Activity turns into a card for the trouble
+during the line's travel times: how bad, your ride as a strip with the troubled stretch broken
+up, and why, with the countdown to the next train kept. It goes back to the trains when the
+trouble clears, and leaves when the travel time ends.
+
 **London strikes.** In **Line alerts → View London strikes**, see current and announced transport strikes grouped by month. Tap a date for London times and line reports. The board reads TfL directly, including its published strike calendar and 180 days of planned line notices. You can browse it without saved routes, notification permission or an alerts server.
 
 **London-wide strike alerts.** Turn on **London-wide strike alerts** in **Line alerts**
@@ -124,6 +136,9 @@ and allow notifications. This works with an alerts server even when you have no 
 Beeline checks TfL’s published strike calendar and looks 30 days ahead in line notices across the Tube, London buses,
 Elizabeth line, DLR, Overground, National Rail services listed by TfL, trams, river buses
 and cable car. Each dated strike period gets a reminder during the 24 hours before it starts, even when it is part of an already-announced dispute. Times are shown in London time. When action starts, a Time Sensitive notification opens the strike list.
+Strike notifications lead with a symbol and say the rest in a line: 📅 for one to come ("Tube strike", "17 + 19 Dec · 12:00 · 24h each": dated periods of one network's strike
+announced together are one notification), ⚠️ once it's on ("Strike now", "Tube · 10 lines affected"), and ✅ for the other rail networks with good service on every line at that moment
+("Elizabeth · DLR · Overground"). TfL's full notice is on the strike list.
 
 **Departure boards.** Every boarding stop shows the departures around yours, the
 ones that have just gone too, filtered to those that stop where you get off, with
@@ -156,13 +171,13 @@ behind availability checks. Generate the Xcode project from the checked-in proje
 2. Open `Beeline.xcodeproj`, select the `Beeline` scheme, pick an iPhone simulator and run. With no keys at all it works:
    TfL (keyless), Transitous and Apple's estimates answer, and Google is shown as needing a key.
 3. For your own iPhone, set in `Config/Secrets.xcconfig`:
-   - `BEELINE_BUNDLE_ID`, if your team needs a different bundle ID (for example, `com.yourname.beeline`); the widget and
-     tests add `.widgets` and `.tests`;
+   - `BEELINE_BUNDLE_ID`, if your team needs a different bundle ID (for example, `com.yourname.beeline`); the widget,
+     the notification extension and tests add `.widgets`, `.notifications` and `.tests`;
    - `DEVELOPMENT_TEAM`, your Apple team ID (developer.apple.com, Membership).
-   A free Apple account can install it for a week at a time, but can't sign the push and
-   Time Sensitive entitlements alerts need; for those you need the paid Apple Developer Program.
-   If signing complains about them on a free account, delete those two keys from
-   `Beeline/Resources/Beeline.entitlements` in your copy.
+   A free Apple account can install it for a week at a time, but can't sign the push, Time
+   Sensitive and Communication Notifications entitlements alerts need; for those you need the
+   paid Apple Developer Program. If signing complains about them on a free account, delete those
+   three keys from `Beeline/Resources/Beeline.entitlements` in your copy.
 4. TfL and Transitous requests identify Beeline with its public repository URL. Set
    `BEELINE_CONTACT` to change that build-time contact.
 

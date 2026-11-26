@@ -22,6 +22,7 @@
       { "at": 1795634900, "cancelled": true }
     ],
     "notice": "Severe delays",
+    "trouble": { "severity": "delays", "from": "Leytonstone", "to": "Liverpool Street", "cause": "Signal failure at Leytonstone", "span": [0.29, 1] },
     "updated": 1795634146,
     "live": true
   }

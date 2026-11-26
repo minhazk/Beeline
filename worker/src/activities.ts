@@ -8,13 +8,15 @@
 import { canPush, send, type Sent, type TokenMemo } from "./apns.ts";
 import { maxPushes, tflRequests, type Env } from "./checks.ts";
 import { inGroups, lineCatalog, lineChecks, stationChecks } from "./linechecks.ts";
+import { brief, ends } from "./brief.ts";
+import { colourFor, pillName, symbolFor } from "./lines.ts";
 import { keyFor, loadLineMaps, type LineMap } from "./linemap.ts";
-import { issuesFor } from "./match.ts";
+import { issuesFor, sectionStations } from "./match.ts";
 import type { Push } from "./push.ts";
 import { activeWindows, instant, localTime, wayOf } from "./schedule.ts";
 import { FOLLOWED_MODES, nextTrains, predictions, type Prediction, type Train } from "./trains.ts";
 import type { LineStatus, StationDisruption, TfLAccess } from "./tfl.ts";
-import type { Alert, Environment, Segment, TimeWindow } from "./types.ts";
+import type { Alert, Environment, Issue, Segment, Severity, TimeWindow } from "./types.ts";
 
 /** What the Live Activity shows, as the app's NextTrainAttributes.ContentState decodes it.
  * BeelineTests/Fixtures/next-train-contract.json is the example both sides test against. */
@@ -22,9 +24,25 @@ export interface ContentState {
   trains: Train[];
   /** Trouble on the way, in a few words: "Severe delays". */
   notice?: string;
+  /** That trouble drawn: where on your ride it is and why. Builds before it show the notice alone. */
+  trouble?: Trouble;
   /** Seconds since 1970. */
   updated: number;
   live: boolean;
+}
+
+/** What the card for trouble on the way shows besides the notice. */
+export interface Trouble {
+  severity: Severity;
+  /** The ends of the stretch TfL names: "Leytonstone", "Hainault". */
+  from?: string;
+  to?: string;
+  /** "Signal failure at Leytonstone". */
+  cause?: string;
+  /** Where it is on your ride, as shares of the way from where you board to where you get off:
+   * [0.4, 1] is the last three fifths. Absent when TfL names no stretch, or one that can't be
+   * placed: then it's the whole ride. */
+  span?: [number, number];
 }
 
 /** The Live Activity's fixed part, for one the server starts (NextTrainAttributes). */
@@ -68,11 +86,29 @@ export function shortNotice(title: string, lineName: string): string {
   return said.length > 40 ? `${said.slice(0, 39).trimEnd()}…` : said;
 }
 
+/** The card's part of an issue: its stretch placed on the ride, when the line's order has it. */
+export function troubleFor(issue: Issue, ride: Segment, map: LineMap | undefined): Trouble {
+  const { from, to, cause, sections } = brief(issue);
+  const trouble: Trouble = { severity: issue.severity, ...(from && to ? { from, to } : {}), ...(cause ? { cause } : {}) };
+  if (!map || ride.stations.length < 2) return trouble;
+  const keys = ride.stations.map((ids) => keyFor(map, ids));
+  // Of the stretches the notice names, the first that your ride is on.
+  for (const section of sections) {
+    const covered = sectionStations(map, section);
+    const hit = keys.map((key) => !!key && !!covered?.has(key));
+    const first = hit.indexOf(true), last = hit.lastIndexOf(true);
+    if (first < 0) continue;
+    const share = (i: number) => Math.round((i / (hit.length - 1)) * 100) / 100;
+    return { ...trouble, ...ends(section), span: [share(first), share(last)] };
+  }
+  return trouble;
+}
+
 /** Everything needed to say what each of these follows shows now: one request per station and
  * line for the trains, the line's station order, and TfL's status for trouble on the way, within
  * what the invocation may still ask (`tfl`). A follow whose trains TfL didn't give comes back
- * undefined, and keeps what it last showed; one whose trouble TfL didn't say keeps the notice it
- * showed (`before`), rather than clearing it and putting it back a minute later. */
+ * undefined, and keeps what it last showed; one whose trouble TfL didn't say keeps the notice and
+ * card it showed (`before`), rather than clearing it and putting it back a minute later. */
 export async function lookup(env: Env, follows: Segment[], now: number, tfl: TfLAccess): Promise<(follow: Segment, before?: ContentState) => ContentState | undefined> {
   const maps = await loadLineMaps(follows.map((f) => f.line.id), tfl, now);
   const boards = new Map<string, Prediction[]>();
@@ -99,9 +135,11 @@ export async function lookup(env: Env, follows: Segment[], now: number, tfl: TfL
     const known = unknownLines !== undefined && !unknownLines.has(follow.line.id) && !unknownModes!.has(follow.mode);
     const [issue] = known ? issuesFor(ride, lines, stations, { at: now }, maps) : [];
     const notice = known ? issue && shortNotice(issue.title, follow.line.name) : before?.notice;
+    const trouble = known ? issue && troubleFor(issue, segment, map) : before?.trouble;
     return {
       trains: nextTrains(board, follow, map, now),
       ...(notice ? { notice } : {}),
+      ...(notice && trouble ? { trouble } : {}),
       updated: sec(now),
       live: true,
     };
@@ -120,7 +158,7 @@ export function urgency(before: ContentState | undefined, after: ContentState, n
     !!a && !!b && Math.abs(a.at - b.at) < 60 && a.cancelled === b.cancelled && (a.late ?? 0) === (b.late ?? 0);
   const [a, b] = [before.trains.slice(0, 3), after.trains.slice(0, 3)];
   if (!same(a[0], b[0]) && (a.length || b.length)) return 10;
-  if (a.length !== b.length || a.some((t, i) => !same(t, b[i])) || before.notice !== after.notice) return 5;
+  if (a.length !== b.length || a.some((t, i) => !same(t, b[i])) || before.notice !== after.notice || JSON.stringify(before.trouble) !== JSON.stringify(after.trouble)) return 5;
   return 0;
 }
 
@@ -174,25 +212,7 @@ export function startPush(attributes: Attributes, state: ContentState, now: numb
 
 // MARK: Starting at your travel times
 
-/** "Central line" → "Central", as the line's pill says it. */
-export const pillName = (name: string) => name.replace(/ line$/i, "");
-
-/** The SF Symbol the app draws for the mode (LegMode.symbol). */
-export function symbolFor(mode: string): string {
-  if (mode === "tube") return "tram.fill.tunnel";
-  if (mode === "dlr" || mode === "tram") return "tram.fill";
-  return "train.side.front.car";
-}
-
-// TfL's line colours, as the app's LineColors has them, for a Live Activity the server starts.
-const COLOURS: Record<string, string> = {
-  bakerloo: "B36305", central: "E32017", circle: "FFD300", district: "00782A", "hammersmith-city": "F3A9BB",
-  jubilee: "A0A5A9", metropolitan: "9B0056", northern: "2B2B2B", piccadilly: "1C3F94", victoria: "0098D4",
-  "waterloo-city": "95CDBA", elizabeth: "6950A1", dlr: "00A4A7", liberty: "61686B", lioness: "FFA32B",
-  mildmay: "2E86F0", suffragette: "59C274", weaver: "A0457A", windrush: "EF4D5E", tram: "5FB526",
-};
-const MODE_COLOURS: Record<string, string> = { tube: "1C3F94", overground: "EE7C0E", "elizabeth-line": "6950A1", dlr: "00A4A7", tram: "5FB526" };
-export const colourFor = (lineId: string, mode: string) => COLOURS[lineId] ?? MODE_COLOURS[mode];
+export { colourFor, pillName, symbolFor };
 
 /** What a time of a saved line follows: its first stretch going out, its last coming back. Nil
  * for a whole-line alert, which has no station to board at, or a line TfL has no times for. */

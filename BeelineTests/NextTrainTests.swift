@@ -27,7 +27,28 @@ struct NextTrainTests {
         #expect(contract.state.trains[1].late == 2)
         #expect(contract.state.trains[2].cancelled)
         #expect(contract.state.notice == "Severe delays")
+        let trouble = try #require(contract.state.trouble)
+        #expect(trouble.severity == "delays")
+        #expect(trouble.from == "Leytonstone" && trouble.to == "Liverpool Street")
+        #expect(trouble.cause == "Signal failure at Leytonstone")
+        #expect(trouble.stretch == 0.29...1)
         #expect(contract.state.trains[0].date == Date(timeIntervalSince1970: 1795634274))
+    }
+
+    /// An older server says the notice alone; a stretch that isn't one is the whole ride.
+    @Test func troubleIsOptionalAndBounded() throws {
+        let plain = try JSONDecoder().decode(NextTrainAttributes.ContentState.self, from: Data(#"{"trains":[],"notice":"Severe delays","updated":1,"live":true}"#.utf8))
+        #expect(plain.trouble == nil && plain.notice == "Severe delays")
+        typealias Trouble = NextTrainAttributes.ContentState.Trouble
+        #expect(Trouble(severity: "delays").stretch == 0...1)
+        #expect(Trouble(severity: "delays", span: [0.8, 0.2]).stretch == 0.2...0.8)
+        #expect(Trouble(severity: "delays", span: [-3, 7]).stretch == 0...1)
+        #expect(Trouble(severity: "delays", span: [0.5]).stretch == 0...1)
+        #expect(Trouble(severity: "delays", span: [.nan, 1]).stretch == 0...1)
+        #expect(Trouble(severity: "delays").word(for: "Severe delays") == "Severe")
+        #expect(Trouble(severity: "minor").word(for: "Minor delays") == "Minor")
+        #expect(Trouble(severity: "closed").word(for: "Part suspended") == "Closed")
+        #expect(Trouble(severity: "delays").word(for: "Reduced service") == "Delays")
     }
 
     /// What the app sends the server to follow is the follow it decodes.

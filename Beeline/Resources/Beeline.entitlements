@@ -5,6 +5,9 @@
 	<!-- Alerts for your lines (worker/). App Store builds are re-signed with "production". -->
 	<key>aps-environment</key>
 	<string>development</string>
+	<!-- A line's alert comes from the line, with its disc where the app icon would be. -->
+	<key>com.apple.developer.usernotifications.communication</key>
+	<true/>
 	<key>com.apple.developer.usernotifications.time-sensitive</key>
 	<true/>
 </dict>

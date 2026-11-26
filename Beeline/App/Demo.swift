@@ -53,6 +53,10 @@ enum Demo {
                                                    towards: "Liverpool Street", follow: nil, departures: departures, refresh: nil))
         var state = NextTrains.state(departures, live: true, now: now)
         state.notice = "Severe delays"
+        // `-demoTrouble`: as the alerts server says it, with where on the ride it is and why.
+        if ProcessInfo.processInfo.arguments.contains("-demoTrouble") {
+            state.trouble = .init(severity: "delays", from: "Leytonstone", to: "Liverpool Street", cause: "Signal failure at Leytonstone", span: [0.29, 1])
+        }
         for activity in Activity<NextTrainAttributes>.activities {
             nonisolated(unsafe) let activity = activity
             await activity.update(ActivityContent(state: state, staleDate: state.staleDate(after: now)))

@@ -2,7 +2,8 @@
 // (git-ignored; scripts/generate.sh copies it from Secrets.example.xcconfig), read last so
 // it wins. In an xcconfig "//" starts a comment, so write URLs as https:/$()/host.
 
-// The app's bundle ID; the widget and tests add ".widgets" and ".tests". The Keychain items,
+// The app's bundle ID; the widget, the notification extension and tests add ".widgets",
+// ".notifications" and ".tests". The Keychain items,
 // the log subsystem and the Google key's iOS restriction all follow it, and an alerts server's
 // APNS_TOPIC must equal it.
 // Accept overrides from Secrets.xcconfig files created before the project rename.

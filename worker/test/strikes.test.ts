@@ -98,3 +98,51 @@ test("a bus strike on both feeds gives one reminder alongside a different operat
     assert.equal(items.filter(x => x.detail.includes("Arriva")).length, 1);
   }
 });
+
+test("networks said to be running are never ones on strike, and periods are told together only for the same strike", async (t) => {
+  const now = Date.parse("2026-12-01T10:00:00Z");
+  const good = (id: string, modeName: string) => ({ id, name: id, modeName, lineStatuses: [{ statusSeverity: 10, statusSeverityDescription: "Good Service" }] });
+  let article = "", live: unknown[] = [], ahead: unknown[] = [];
+  t.mock.method(globalThis, "fetch", async (input: RequestInfo) => {
+    const url = new URL(String(input));
+    if (url.pathname === "/status-updates/strikes") return new Response(article);
+    return Response.json(url.pathname.includes("/Mode/") ? live : ahead);
+  });
+  const quiet = [good("central", "tube"), good("elizabeth", "elizabeth-line"), good("dlr", "dlr"), good("mildmay", "overground"), good("windrush", "overground")];
+  const dates = (heading: string, ...items: string[]) => `<h2>${heading}</h2><h2>Strike dates</h2><ul>${items.map((s) => `<li>${s}</li>`).join("")}</ul>`;
+
+  // A published Overground strike is on, though its lines still read good service: not "running".
+  article = dates("London Overground strike", "09:00 Tuesday 1 to 08:59 Wednesday 2 December 2026");
+  live = quiet;
+  let [notice] = await londonStrikes(now, {});
+  assert.equal(notice.active, true);
+  assert.deepEqual(notice.running, ["Tube", "Elizabeth", "DLR"]);
+
+  // Two networks out at once: neither is listed beside the other.
+  article = dates("Tube drivers’ strike", "09:00 Tuesday 1 to 08:59 Wednesday 2 December 2026") + dates("DLR strike", "09:00 Tuesday 1 to 08:59 Wednesday 2 December 2026");
+  for (const item of await londonStrikes(now, {})) assert.deepEqual(item.running, ["Elizabeth", "Overground"], item.network);
+
+  // A strike whose network can't be told from its heading says nothing about the others.
+  article = dates("Station staff walkout", "09:00 Tuesday 1 to 08:59 Wednesday 2 December 2026");
+  [notice] = await londonStrikes(now, {});
+  assert.equal(notice.running, undefined);
+
+  // A line with any trouble, or one TfL didn't answer for, keeps its network off the list.
+  article = "";
+  const striking = { id: "central", name: "Central", modeName: "tube", lineStatuses: [{ statusSeverity: 6, statusSeverityDescription: "Severe Delays", reason: "No service due to strike action." }] };
+  live = [striking, good("elizabeth", "elizabeth-line"), good("dlr", "dlr"), good("mildmay", "overground"), { id: "windrush", name: "Windrush", modeName: "overground", lineStatuses: [{ statusSeverity: 9, statusSeverityDescription: "Minor Delays" }] }];
+  [notice] = await londonStrikes(now, {});
+  assert.deepEqual([notice.network, notice.lines, notice.running], ["Tube", ["Central"], ["Elizabeth", "DLR"]]);
+
+  // Published periods of one strike share its identity; a line's own strike on another day doesn't.
+  article = dates("Tube drivers’ strikes", "12:00 Thursday 17 to 11:59 Friday 18 December 2026", "12:00 Saturday 19 to 11:59 Sunday 20 December 2026");
+  live = quiet.map((line) => ({ ...line, lineStatuses: [] }));
+  ahead = [{ id: "central", name: "Central", modeName: "tube", lineStatuses: [{ statusSeverity: 0, reason: "Central line staff are planning strike action.",
+    validityPeriods: [{ fromDate: "2026-12-05T00:00:00Z", toDate: "2026-12-06T00:00:00Z" }] }] }];
+  const coming = await londonStrikes(now, {});
+  assert.deepEqual(coming.map((n) => [n.from, n.lines]), [
+    [Date.parse("2026-12-05T00:00:00Z"), ["Central"]], [Date.parse("2026-12-17T12:00:00Z"), []], [Date.parse("2026-12-19T12:00:00Z"), []],
+  ]);
+  assert.equal(coming[1].strike, coming[2].strike);
+  assert.notEqual(coming[0].strike, coming[1].strike);
+});

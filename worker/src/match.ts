@@ -161,12 +161,12 @@ function lineIssues(alert: Alert, segment: Segment, lines: LineStatus[], when: W
         const detail = whole ? clean(status.reason) : c.sectionTexts[k];
         // By the section's names, so it's the same disruption with or without the line's order.
         const id = signature(tag, [...s.from, "|", ...s.to, ...(s.via ? ["via", s.via] : [])].map((n) => spellings(n)[0] ?? n).join("/"));
-        const covered = map ? where(map, s) : undefined;
+        const covered = map ? sectionStations(map, s) : undefined;
         // A name we can't find on the line: when unsure, tell.
-        if (!covered) return [{ signature: id, severity: level, line: segment.line.name, title: named, detail, from: timing.from }];
+        if (!covered) return [{ signature: id, severity: level, line: segment.line.name, title: named, detail, section: s, from: timing.from }];
         const keys = segment.stations.map((ids) => keyFor(map!, ids));
         // A station of yours the line no longer knows (renumbered since the alert was saved): unsure, tell.
-        if (ours.length && keys.some((key) => !key)) return [{ signature: id, severity: level, line: segment.line.name, title: named, detail, from: timing.from }];
+        if (ours.length && keys.some((key) => !key)) return [{ signature: id, severity: level, line: segment.line.name, title: named, detail, section: s, from: timing.from }];
         let severity = level;
         if (ours.length) {
           const hit = keys.map((key) => !!key && covered.has(key));
@@ -176,7 +176,7 @@ function lineIssues(alert: Alert, segment: Segment, lines: LineStatus[], when: W
           else if (c.family === "closure" && hit.some(Boolean)) severity = "delays";
           else return [];
         }
-        return [{ signature: id, severity, line: segment.line.name, title: named, detail, from: timing.from }];
+        return [{ signature: id, severity, line: segment.line.name, title: named, detail, section: s, from: timing.from }];
       });
     });
   });
@@ -184,7 +184,7 @@ function lineIssues(alert: Alert, segment: Segment, lines: LineStatus[], when: W
 }
 
 /** Where on the line a section in TfL's words is; undefined when a name isn't on it. */
-function where(map: LineMap, s: Section): Set<string> | undefined {
+export function sectionStations(map: LineMap, s: Section): Set<string> | undefined {
   const ends = (names: string[]) => {
     const found = names.map((n) => place(map, n));
     return found.some((f) => !f.size) ? undefined : new Set(found.flatMap((f) => [...f]));
