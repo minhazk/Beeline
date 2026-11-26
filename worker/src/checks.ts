@@ -1,11 +1,12 @@
-// Every two minutes: for each phone, the alerts whose times are now, against TfL. Nothing is
-// fetched when nobody is travelling. The evening before, planned works on tomorrow's trips.
+// Every two minutes, check active commutes and any subscriptions to London-wide strikes.
+// The evening before, also check planned works on tomorrow's trips.
 
 import { canPush, PushSetupError, send, type ApnsEnv, type TokenMemo } from "./apns.ts";
 import { loadLineMaps } from "./linemap.ts";
 import { issuesFor, issuesInRanges, linesToPlace, type LineMaps } from "./match.ts";
 import { MAX_RETRIES, plannedStep, step, type DeviceState, type Ways } from "./policy.ts";
-import { clearPush, issuesPush, plannedPush, probePush, type Push } from "./push.ts";
+import { clearPush, issuesPush, plannedPush, probePush, strikePush, type Push } from "./push.ts";
+import { londonStrikes } from "./strikes.ts";
 import { activeWindows, dateKey, during, eachWay, localTime, PLANNED_CHECK_AT, travelRanges } from "./schedule.ts";
 import { lineCatalog, lineChecks, stationChecks } from "./linechecks.ts";
 import type { LineStatus, StationDisruption } from "./tfl.ts";
@@ -29,13 +30,14 @@ interface Row {
   environment: Device["environment"];
   time_zone: string;
   alerts: string;
+  strike_alerts: number;
   state: string;
   revision: string;
   enrollment_hash: string | null;
   updated_at: number;
 }
 
-type Loaded = Device & { state: DeviceState; revision: string; enrollment: string | null; updatedAt: number };
+type Loaded = Device & { strikeAlerts: boolean; state: DeviceState; revision: string; enrollment: string | null; updatedAt: number };
 
 // A phone not heard from for this long (no registration, no push Apple took) is asked after, a
 // few a run, with a push that shows nothing: Apple says when the app has gone from it, and then
@@ -152,7 +154,7 @@ async function forgetGone(env: Env, device: Loaded, since: number | undefined): 
 export const emptyState = (): DeviceState => ({ alerts: {}, planned: {} });
 
 export async function loadDevices(env: Env): Promise<Loaded[]> {
-  const { results } = await env.DB.prepare("SELECT token, environment, time_zone, alerts, state, revision, enrollment_hash, updated_at FROM devices ORDER BY rowid").all<Row>();
+  const { results } = await env.DB.prepare("SELECT token, environment, time_zone, alerts, strike_alerts, state, revision, enrollment_hash, updated_at FROM devices ORDER BY rowid").all<Row>();
   return results.flatMap((r): Loaded[] => {
     try {
       const alerts = JSON.parse(r.alerts) as Alert[];
@@ -166,10 +168,11 @@ export async function loadDevices(env: Env): Promise<Loaded[]> {
       const record = (v: unknown) => v !== null && typeof v === "object" && !Array.isArray(v);
       if (!record(kept.alerts)) kept.alerts = {};
       if (!record(kept.planned)) kept.planned = {};
+      if (kept.strikes !== undefined && !record(kept.strikes)) delete kept.strikes;
       if (kept.retries !== undefined && !record(kept.retries)) delete kept.retries;
       if (kept.refused !== undefined && !(record(kept.refused) && [kept.refused.first, kept.refused.last, kept.refused.count].every(Number.isFinite))) delete kept.refused;
       for (const key of ["heard", "revoked"] as const) if (kept[key] !== undefined && !Number.isFinite(kept[key])) delete kept[key];
-      return [{ token: r.token, environment: r.environment, timeZone: r.time_zone, alerts: known, state: kept, revision: r.revision,
+      return [{ token: r.token, environment: r.environment, timeZone: r.time_zone, alerts: known, strikeAlerts: r.strike_alerts === 1, state: kept, revision: r.revision,
         enrollment: r.enrollment_hash ?? null, updatedAt: Number(r.updated_at) || 0 }];
     } catch {
       // One unreadable row must not stop every other phone's checks.
@@ -263,7 +266,7 @@ export async function runChecks(given: Env, now = Date.now()): Promise<{ devices
           const windows = activeWindows(a, now, device.timeZone);
           return windows.length ? [{ alert: during(a, windows), base: a }] : [];
         }),
-        planned: local.minutes >= PLANNED_CHECK_AT && device.state.plannedOn !== dateKey(local),
+        planned: device.alerts.length > 0 && local.minutes >= PLANNED_CHECK_AT && device.state.plannedOn !== dateKey(local),
         today: dateKey(local),
         // Read here so an alert with no segments to read fails here, not for everyone below.
         segments: device.alerts.flatMap((a) => a.segments.map((segment) => segment.line.id)).length,
@@ -292,7 +295,9 @@ export async function runChecks(given: Env, now = Date.now()): Promise<{ devices
     }
     await noteDeliveries(env, run, now);
   };
-  if (!live.length && !plannedAlerts.length) {
+  const tfl = { key: env.TFL_APP_KEY, ops: tflRequests(env, run.most) };
+  const strikes = work.some(({ device }) => device.strikeAlerts) ? await londonStrikes(now, tfl) : [];
+  if (!live.length && !plannedAlerts.length && !strikes.length) {
     await probeOnly();
     return { devices: devices.length, checked: 0, sent: 0 };
   }
@@ -300,14 +305,14 @@ export async function runChecks(given: Env, now = Date.now()): Promise<{ devices
   const segments = [...live, ...plannedAlerts].flatMap((a) => a.segments);
   // What the run may ask of TfL, counted so its pushes still have requests to go out on. What
   // is live now is asked of TfL itself (the cache keeps it less long than runs are apart).
-  const tfl = { key: env.TFL_APP_KEY, ops: tflRequests(env, run.most) };
   const liveNow = { ...tfl, uncached: true };
-  let catalog: Map<string, string>;
-  try { catalog = await lineCatalog(tfl); }
+  let catalog = new Map<string, string>();
+  try { if (segments.length) catalog = await lineCatalog(tfl); }
   catch {
-    // TfL not answering is no reason to leave a phone that has gone unasked after.
-    await probeOnly();
-    return { devices: devices.length, checked: 0, sent: 0 };
+    if (!strikes.length) {
+      await probeOnly();
+      return { devices: devices.length, checked: 0, sent: 0 };
+    }
   }
   const [lineReport, stationReport] = await Promise.all([
     lineChecks(live.flatMap((a) => a.segments), catalog, liveNow),
@@ -341,7 +346,7 @@ export async function runChecks(given: Env, now = Date.now()): Promise<{ devices
   run.started = Date.now();
   try {
     for (const { device, live: active, planned, today } of work) {
-      if (!active.length && !planned) continue;
+      if (!active.length && !planned && !(device.strikeAlerts && strikes.length)) continue;
       if (run.asked >= run.most || run.queries() >= run.budget || run.broken.has("all") || Date.now() - run.started > RUN_BUDGET) break;
       const before = JSON.stringify(device.state), decided = substance(device.state);
       const state = device.state;
@@ -449,6 +454,24 @@ export async function runChecks(given: Env, now = Date.now()): Promise<{ devices
           }
           // Tomorrow is settled only when every alert's planned works went out (or were given up on).
           if (allDone) state.plannedOn = today;
+        }
+        if (device.strikeAlerts && strikes.length) {
+          const told = state.strikes ??= {};
+          for (const [key, until] of Object.entries(told)) if (until <= now) delete told[key];
+          for (const notice of strikes) {
+            if (stopped || halted) break;
+            if (notice.occurrences.every(key => told[key])) {
+              // A live report may get a new validity period every few minutes.
+              // Keep it remembered while TfL continues reporting the strike.
+              if (notice.active) {
+                for (const key of notice.occurrences) if (told[key] < now + HOUR) told[key] = now + 3 * HOUR;
+              }
+              continue;
+            }
+            await deliver(`strike:${notice.key}`, strikePush(notice, now), () => {
+              for (const key of notice.occurrences) told[key] = notice.active ? now + 3 * HOUR : notice.expires + 86400_000;
+            });
+          }
         }
         // Forget alerts the phone no longer has.
         for (const id of Object.keys(state.alerts)) if (!device.alerts.some((a) => a.id === id)) delete state.alerts[id];

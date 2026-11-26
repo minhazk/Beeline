@@ -8,7 +8,7 @@ import { canPush, send } from "./apns.ts";
 import { emptyState, runChecks, tflRequests, type Env } from "./checks.ts";
 import { loadLineMaps } from "./linemap.ts";
 import { issuesFor, issuesInRanges, linesToPlace } from "./match.ts";
-import { issuesPush, lineList } from "./push.ts";
+import { issuesPush, lineList, strikePush } from "./push.ts";
 import { activeWindows, during, eachWay, travelRanges } from "./schedule.ts";
 import { useLocalTfL } from "./tfl.ts";
 import { lineCatalog, lineChecks, stationChecks, TfLUnavailable, validateLines } from "./linechecks.ts";
@@ -138,13 +138,14 @@ app.put("/v1/devices/:token", async (c) => {
   const enrollment = c.get("enrollmentHash");
   const body = valid.body(await c.req.json().catch(() => ({})));
   const alerts = valid.alerts(body.alerts);
-  if (!alerts.length) throw new valid.Invalid("A registration needs at least one scheduled alert");
+  const strikeAlerts = body.strikeAlerts === true;
+  if (!alerts.length && !strikeAlerts) throw new valid.Invalid("A registration needs a scheduled alert or London-wide strike alerts");
   const environment = valid.environment(body.environment), timeZone = valid.timeZone(body.timeZone);
   // The phone's push-to-start token, for saved lines that start a Live Activity themselves. One
   // that isn't a token is left out, not a reason to refuse the alerts.
   let startToken: string | null = null;
-  try { if (body.startToken != null) startToken = valid.deviceToken(String(body.startToken)); } catch {}
-  validateLines(alerts, await lineCatalog({ key: c.env.TFL_APP_KEY, ops: tflRequests(c.env, 0) }));
+  try { if (alerts.length && body.startToken != null) startToken = valid.deviceToken(String(body.startToken)); } catch {}
+  if (alerts.length) validateLines(alerts, await lineCatalog({ key: c.env.TFL_APP_KEY, ops: tflRequests(c.env, 0) }));
   // The order of arrival is only kept for as long as removals are remembered: a request that has
   // been on its way longer than that (an upload that crawled) is asked to come again.
   if (Date.now() - arrived > REMOVAL_MEMORY / 2) return c.json({ error: "That took too long to arrive. Save the alerts again.", code: "late" }, 409);
@@ -159,21 +160,21 @@ app.put("/v1/devices/:token", async (c) => {
   // not removed and added, so its place is kept on a full server; and only a registration older
   // than this request, so one sent before a newer token registered can't take its place late.
   await c.env.DB.prepare(
-    `UPDATE devices SET token = ?3, environment = ?6, time_zone = ?7, alerts = ?8, start_token = ?9, updated_at = ?4, revision = lower(hex(randomblob(16))), state = ${freshState}
+    `UPDATE devices SET token = ?3, environment = ?6, time_zone = ?7, alerts = ?8, start_token = ?9, strike_alerts = ?10, updated_at = ?4, revision = lower(hex(randomblob(16))), state = ${freshState}
      WHERE enrollment_hash = ?1 AND secret_hash = ?2 AND token != ?3 AND updated_at < ?4
        AND NOT EXISTS (SELECT 1 FROM devices WHERE token = ?3)
        AND NOT EXISTS (SELECT 1 FROM meta WHERE key = ?5 AND updated_at >= ?4)`,
-  ).bind(enrollment, hash, token, arrived, removal, environment, timeZone, JSON.stringify(alerts), startToken).run();
+  ).bind(enrollment, hash, token, arrived, removal, environment, timeZone, JSON.stringify(alerts), startToken, Number(strikeAlerts)).run();
   // One statement: a phone already stored is updated; a new one only while there's room, so
   // two registrations at once can't both take the last place. `updated_at` is when the request
   // arrived: an older change that finishes after a newer one changes nothing.
   const result = await c.env.DB.prepare(
-    `INSERT INTO devices (token, environment, time_zone, alerts, state, updated_at, secret_hash, revision, enrollment_hash, start_token)
-     SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, lower(hex(randomblob(16))), ?9, ?11
+    `INSERT INTO devices (token, environment, time_zone, alerts, state, updated_at, secret_hash, revision, enrollment_hash, start_token, strike_alerts)
+     SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, lower(hex(randomblob(16))), ?9, ?11, ?12
      WHERE (EXISTS (SELECT 1 FROM devices WHERE token = ?1) OR (SELECT COUNT(*) FROM devices) < ?8)
        AND NOT EXISTS (SELECT 1 FROM meta WHERE key = ?10 AND updated_at >= ?6)
      ON CONFLICT(token) DO UPDATE SET environment = ?2, time_zone = ?3, alerts = ?4, updated_at = ?6, revision = excluded.revision,
-       state = ${freshState}, start_token = ?11,
+       state = ${freshState}, start_token = ?11, strike_alerts = excluded.strike_alerts,
        -- The invitation used now is the one kept. A phone from before invitations keeps none
        -- when another phone already holds this one (they shared it, as phones then did).
        enrollment_hash = CASE WHEN EXISTS (SELECT 1 FROM devices AS other WHERE other.enrollment_hash = excluded.enrollment_hash AND other.token != excluded.token)
@@ -184,7 +185,7 @@ app.put("/v1/devices/:token", async (c) => {
        AND (devices.enrollment_hash IS NULL OR devices.enrollment_hash = excluded.enrollment_hash
          OR NOT EXISTS (SELECT 1 FROM devices AS other WHERE other.enrollment_hash = excluded.enrollment_hash AND other.token != excluded.token))
      ON CONFLICT(enrollment_hash) DO NOTHING`,
-  ).bind(token, environment, timeZone, JSON.stringify(alerts), JSON.stringify(emptyState()), arrived, hash, maxDevices(c.env), enrollment, removal, startToken).run();
+  ).bind(token, environment, timeZone, JSON.stringify(alerts), JSON.stringify(emptyState()), arrived, hash, maxDevices(c.env), enrollment, removal, startToken, Number(strikeAlerts)).run();
   if (!result.meta?.changes) {
     await rejectOtherOwner(c.env.DB, token, hash);
     if (await c.env.DB.prepare("SELECT 1 FROM meta WHERE key = ?1 AND updated_at >= ?2").bind(removal, arrived).first()) {
@@ -202,7 +203,7 @@ app.put("/v1/devices/:token", async (c) => {
   }
   // Whether a notification could be sent now, so the app doesn't show alerts as on when the
   // server has no push key yet.
-  return c.json({ ok: true, alerts: alerts.length, pushes: canPush(c.env) });
+  return c.json({ ok: true, alerts: alerts.length, strikeAlerts, pushes: canPush(c.env) });
 });
 
 app.delete("/v1/devices/:token", async (c) => {
@@ -234,21 +235,21 @@ app.post("/v1/status", async (c) => {
 app.post("/v1/devices/:token/test", async (c) => {
   const token = valid.deviceToken(c.req.param("token"));
   const hash = await ownerHash(c);
-  const row = await c.env.DB.prepare("SELECT environment, time_zone, alerts, revision, updated_at FROM devices WHERE token = ?1 AND secret_hash = ?2")
-    .bind(token, hash).first<{ environment: "sandbox" | "production"; time_zone: string; alerts: string; revision: string; updated_at: number }>();
+  const row = await c.env.DB.prepare("SELECT environment, time_zone, alerts, strike_alerts, revision, updated_at FROM devices WHERE token = ?1 AND secret_hash = ?2")
+    .bind(token, hash).first<{ environment: "sandbox" | "production"; time_zone: string; alerts: string; strike_alerts: number; revision: string; updated_at: number }>();
   if (!row) {
     await rejectOtherOwner(c.env.DB, token, hash);
     return c.json({ error: "This phone isn't registered yet" }, 404);
   }
   const alerts = JSON.parse(row.alerts) as Alert[];
-  if (!alerts.length) return c.json({ error: "No alerts to test" }, 400);
+  if (!alerts.length && !row.strike_alerts) return c.json({ error: "No alerts to test" }, 400);
   const now = Date.now();
   // What's wrong now if TfL answers; the point is proving delivery, so not if it doesn't.
   const statuses = await status(c.env, alerts, row.time_zone, now, 1).then((s) => s.alerts, () => []);
   const withIssues = statuses.find((s) => s.issues.length);
   // Good service is said only of a line TfL answered for.
   const known = withIssues ?? statuses[0];
-  const alert = alerts.find((a) => a.id === (known?.id ?? alerts[0].id))!;
+  const alert = alerts.find((a) => a.id === known?.id) ?? alerts[0];
   const good = known ? `Good service on ${lineList(alert)} now. ` : "";
   const issues: Issue[] = withIssues?.issues.map((i) => ({ ...i, signature: "test", line: "", from: undefined })) ?? [
     { signature: "test", severity: "delays", line: "", title: "Test: alerts are on", detail: `${good}A closure or delay will come through like this.` },
@@ -261,7 +262,10 @@ app.post("/v1/devices/:token/test", async (c) => {
     return c.json({ error: "This phone isn't registered yet" }, 404);
   }
   if (current.revision !== row.revision) return c.json({ error: "These alerts changed. Try the test again." }, 409);
-  const result = await send(c.env, token, row.environment, { ...issuesPush(alert, issues, now), collapseId: `${alert.id}-test` }, now);
+  const push = alert ? { ...issuesPush(alert, issues, now), collapseId: `${alert.id}-test` } : strikePush({
+    key: "test", title: "Test · London-wide strike alerts", detail: "Beeline will notify you about upcoming and ongoing transport strikes.", active: false, expires: now + 300_000,
+  }, now);
+  const result = await send(c.env, token, row.environment, push, now);
   // Apple says the app is gone from that phone: so is its registration, unless it registered
   // after Apple last looked.
   if (result.gone && (result.goneSince === undefined || row.updated_at <= result.goneSince)) {
@@ -399,6 +403,6 @@ export default {
       ctx.waitUntil(runActivities(env).then((r) => (r.sent || r.started || r.ended) && console.log("live", JSON.stringify(r))));
       return;
     }
-    ctx.waitUntil(runChecks(env).then((r) => r.checked && console.log("checked", JSON.stringify(r))));
+    ctx.waitUntil(runChecks(env).then((r) => (r.checked || r.sent) && console.log("checked", JSON.stringify(r))));
   },
 } satisfies ExportedHandler<Env>;

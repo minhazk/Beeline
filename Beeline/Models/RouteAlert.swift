@@ -160,6 +160,7 @@ struct RouteAlert: Codable, Hashable, Identifiable, Sendable {
         var alerts: [Wire]
         /// The next-train Live Activity's push-to-start token, for alerts that start one.
         var startToken: String?
+        var strikeAlerts: Bool?
     }
 
     /// What's sent: the name is always filled in, so the notification says it.
@@ -209,8 +210,8 @@ struct RouteAlert: Codable, Hashable, Identifiable, Sendable {
         private var lines = Set<String>()
         private var bytes: Int
 
-        init(_ alerts: [RouteAlert]) {
-            let envelope = Registration(environment: "production", timeZone: TimeZone.current.identifier, alerts: [])
+        init(_ alerts: [RouteAlert], strikeAlerts: Bool = false) {
+            let envelope = Registration(environment: "production", timeZone: TimeZone.current.identifier, alerts: [], strikeAlerts: strikeAlerts ? true : nil)
             bytes = (try? JSONEncoder().encode(envelope).count) ?? 256
             for alert in alerts {
                 if let problem = include(alert) { pending[alert.id] = problem }

@@ -1,0 +1,1 @@
+ALTER TABLE devices ADD COLUMN strike_alerts INTEGER NOT NULL DEFAULT 0;

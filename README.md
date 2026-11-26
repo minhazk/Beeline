@@ -117,6 +117,13 @@ minor delays, quiet for "good service again". Planned works on tomorrow's trips 
 7 pm the evening before. One notification per disruption, again only if it gets worse.
 The home page shows each saved line's status.
 
+**London-wide strike alerts.** Turn on **London-wide strike alerts** in **Line alerts**
+and allow notifications. This works with an alerts server even when you have no saved lines.
+Beeline checks TfL's current notices and looks 30 days ahead across the Tube, London buses,
+Elizabeth line, DLR, Overground, National Rail services listed by TfL, trams, river buses
+and cable car. Upcoming strike notifications give dates in London time. Ongoing action
+gets a Time Sensitive notification, including when a previously announced strike starts.
+
 **Departure boards.** Every boarding stop shows the departures around yours, the
 ones that have just gone too, filtered to those that stop where you get off, with
 what each does to your arrival there ("+3 min", "−2 min") and the line's status.
@@ -226,7 +233,8 @@ send notifications to your build of the app, and sign the app with the push enti
    missing, and until it's set the cron judges nothing, so no disruption is lost.
    `"tflKey":false` means `TFL_APP_KEY` isn't set.
 8. Open Line alerts → Connect alerts server in a build without a configured service. Enter the server address and **that phone’s invitation**,
-   then tap Use this server. Under Line alerts, save an alert, allow notifications, and choose Send a test notification.
+   then tap Use this server. Under Line alerts, save a line or enable London-wide strike alerts,
+   allow notifications, and choose Send a test notification.
 
 Each invitation admits one phone at a time. Each install also sends a random device secret so
 only its owner can change, test or remove the registration; the same install with a new push
@@ -252,7 +260,8 @@ handful of phones whose owners you trust: every request is a database write, and
 allowance on Free is shared by them all.
 
 What the server keeps for a phone is its push token, the lines, stations and times of its
-alerts, and its time zone. It goes when you remove the last alert, change server, or turn
+alerts, its London-wide strike preference, and its time zone. It goes when you remove the
+last subscription, change server, or turn
 notifications off for Beeline (the next time the app is in front), and when Apple says the app
 has gone from the phone: a phone not
 heard from in a month is asked after with a push that shows nothing, so a deleted app's
@@ -292,10 +301,13 @@ keeps to these limits, and changes should too:
   Activity the alerts server follows is one request a minute for its station's trains (shared by
   every one at that station, kept 20 seconds), only while one is showing. Live buses are one
   arrivals request every 30 seconds while a bus line is on the map, and each line's route
-  once per launch. The alerts server asks TfL only while someone is inside their travel
+  once per launch. For saved lines, the alerts server asks TfL while someone is inside their travel
   times: one line-status and one station-disruptions request per two-minute run, cached a
   minute, plus planned works once an evening, and a line's station order (about 200 KB) only
   for lines a saved alert needs, kept a week.
+  When a phone subscribes to citywide strikes, the server also checks live status across
+  all modes (cached for ten minutes) and rotates through dated forecasts in batches of
+  up to 20 lines. All subscribed phones share these checks.
 - **Google**: kept inside the free monthly allowance (counted per Google month on the phone:
   deep search asks five ways under 700 requests, one under 900, none past 900).
 - **Re-plans during Go** happen only on an event or a tap, never on a timer: at most three

@@ -740,3 +740,93 @@ test("a line order there were no requests left to ask for is waited for, not gue
   await loadLineMaps(["elizabeth"], { ops: { left: 5 } }, Date.parse("2026-11-09T17:02:00Z"));
   assert.equal(requests.filter((r) => r.url.includes("/Route/Sequence/")).length, 1);
 });
+
+test("London-wide strikes are pushed without saved lines, once in advance and again when active", async () => {
+  const { env, db, requests } = await setup(200, [], "fixture", []);
+  await db.prepare("UPDATE devices SET strike_alerts = 1").run();
+  const recorded = globalThis.fetch;
+  const start = Date.parse("2026-11-26T12:00:00Z");
+  const end = start + 24 * 3600_000;
+  const before = start - 6 * 86400_000;
+  const line = (id: string, name: string, modeName: string, reason: string, from = start, to = end) => ({
+    id, name, modeName, lineStatuses: [{ statusSeverity: 0, statusSeverityDescription: "Special Service", reason,
+      validityPeriods: [{ fromDate: new Date(from).toISOString(), toDate: new Date(to).toISOString() }], disruption: { category: "Information" } }],
+  });
+  const announcement = "Tube drivers are planning to take strike action.";
+  const tube = [line("central", "Central", "tube", announcement), line("circle", "Circle", "tube", announcement)];
+  const bus = line("25", "25", "bus", "Industrial action is affecting route 25.", before - 3600_000, before + 3600_000);
+  const rail = line("southeastern", "Southeastern", "national-rail", "Walkout planned by train staff.", start + 86400_000, end + 86400_000);
+  const other = [line("tram", "Tram", "tram", "A bridge strike has caused delays."),
+    line("dlr", "DLR", "dlr", "Planned industrial action has been called off."),
+    line("elizabeth", "Elizabeth line", "elizabeth-line", "A strike ended yesterday.", before - 86400_000, before - 3600_000)];
+  let live = [bus, ...other];
+  const ahead = [...tube, rail, ...other];
+  let forecastDown = false;
+  globalThis.fetch = async (input, init) => {
+    const u = new URL(String(input));
+    if (u.pathname.startsWith("/Line/Mode/") && u.pathname.endsWith("/Status")) {
+      const quiet = [rail, ...tube].filter(l => !live.some(active => active.id === l.id)).map(l => ({ ...l, lineStatuses: [] }));
+      return Response.json([...live, ...quiet]);
+    }
+    if (u.pathname.includes("/to/")) return forecastDown ? new Response("Unavailable", { status: 503 }) : Response.json(ahead);
+    return recorded(input, init);
+  };
+  const notifications = () => requests.filter(r => r.url.includes("push.apple.com")).map(r => JSON.parse(r.init!.body as string).aps);
+  assert.equal((await runChecks(env, before)).sent, 3);
+  assert.deepEqual(notifications().map(n => n.alert.title), ["Strike disruption · London buses", "Upcoming strike · Tube", "Upcoming strike · National Rail"]);
+  assert.match(notifications()[1].alert.body, /26 Nov.*12:00/);
+  assert.equal(notifications()[1]["interruption-level"], "active");
+  assert.equal((await runChecks(env, before + 120_000)).sent, 0);
+
+  // TfL now reports changing individual line statuses instead of the advance bulletin.
+  live = [line("circle", "Circle", "tube", "Circle Line: No service due to strike action."), tube[0]];
+  forecastDown = true;
+  assert.equal((await runChecks(env, start)).sent, 1, "live checks still work when the forecast fails");
+  const current = notifications().at(-1);
+  assert.equal(current.alert.title, "Strike disruption · Tube");
+  assert.equal(current["interruption-level"], "time-sensitive");
+  assert.match(current.alert.body, /Central, Circle/);
+  assert.equal((await runChecks(env, start + 120_000)).sent, 0);
+
+  await db.prepare("UPDATE devices SET strike_alerts = 0").run();
+  let calls = 0;
+  globalThis.fetch = async () => { calls++; throw new Error("unexpected fetch"); };
+  assert.equal((await runChecks(env, start + 240_000)).sent, 0);
+  assert.equal(calls, 0);
+});
+
+test("a citywide feed outage does not delay a saved line notification", async () => {
+  const { env, db, requests } = await setup();
+  await db.prepare("UPDATE devices SET strike_alerts = 1").run();
+  const recorded = globalThis.fetch;
+  globalThis.fetch = async (input, init) => String(input).includes("/Status?detail=false")
+    ? new Response("", { status: 503 }) : recorded(input, init);
+  await runChecks(env, Date.parse("2026-11-09T17:00:00Z"));
+  assert.deepEqual(pushesTo(requests), [contract().alerts[0].id]);
+});
+
+test("coinciding bus operator strikes each reach the phone across dated batches, and a syndicated bulletin only once", async () => {
+  const { env, db, requests } = await setup(200, [], "fixture", []);
+  await db.prepare("UPDATE devices SET strike_alerts = 1").run();
+  const recorded = globalThis.fetch;
+  const routes = Array.from({ length: 40 }, (_, i) => String(100 + i));
+  globalThis.fetch = async (input, init) => {
+    const path = new URL(String(input)).pathname;
+    if (path.startsWith("/Line/Mode/")) return Response.json(routes.map(id => ({ id, name: id, modeName: "bus", lineStatuses: [] })));
+    if (path.includes("/to/")) {
+      const batch = path.split("/")[2].split(",");
+      return Response.json(batch.map(id => {
+        const operator = id === "100" || id === "120" ? "North" : id === "121" ? "West" : "";
+        const reason = `Route ${id}: ${operator} depot drivers are planning strike action.`;
+        const validityPeriods = [{ fromDate: "2026-12-02T00:00:00Z", toDate: "2026-12-03T00:00:00Z" }];
+        return { id, name: id, lineStatuses: operator ? [{ statusSeverity: 0, reason, validityPeriods }] : [] };
+      }));
+    }
+    return recorded(input, init);
+  };
+  const start = Date.parse("2026-11-26T12:00:00Z");
+  for (let i = 0; i < 4; i++) await runChecks(env, start + i * 120_000);
+  const pushes = requests.filter(r => r.url.includes("push.apple.com")).map(r => JSON.parse(r.init!.body as string).aps.alert.body);
+  assert.equal(pushes.length, 2);
+  for (const operator of ["North", "West"]) assert.equal(pushes.filter(p => p.includes(operator)).length, 1);
+});

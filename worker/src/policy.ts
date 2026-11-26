@@ -16,6 +16,8 @@ export interface AlertState {
 
 export interface DeviceState {
   alerts: Record<string, AlertState>;
+  /** London-wide strike bulletins already delivered, with the time each can be forgotten. */
+  strikes?: Record<string, number>;
   /** Planned works already told, by alert and signature, with when. */
   planned: Record<string, number>;
   /** Local date of the last evening check for tomorrow. */

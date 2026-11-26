@@ -190,7 +190,7 @@ struct HomeSheet: View {
             HStack(alignment: .top, spacing: 12) {
                 savedSlot("Home", icon: "house.fill", place: places.home, set: .home, tint: Theme.tint) { places.home = nil }
                 savedSlot("Work", icon: "briefcase.fill", place: places.work, set: .work, tint: Color(uiColor: .systemBrown)) { places.work = nil }
-                shortcut("Alerts", icon: "bell.fill", tint: .orange, subdued: alerts.alerts.isEmpty) { alerts.showAlerts = true }
+                shortcut("Alerts", icon: "bell.fill", tint: .orange, subdued: alerts.alerts.isEmpty && !alerts.strikeAlerts) { alerts.showAlerts = true }
                 ForEach(places.favorites) { place in
                     shortcut(place.name, icon: "mappin", tint: Color(uiColor: .systemRed)) { go(to: place) }
                         .contextMenu { Button("Remove place", systemImage: "trash", role: .destructive) { places.removeFavorite(place) } }
