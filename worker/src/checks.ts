@@ -457,20 +457,37 @@ export async function runChecks(given: Env, now = Date.now()): Promise<{ devices
         }
         if (device.strikeAlerts && strikes.length) {
           const told = state.strikes ??= {};
-          for (const [key, until] of Object.entries(told)) if (until <= now) delete told[key];
+          for (const [key, until] of Object.entries(told)) {
+            if (until <= now) { delete told[key]; continue; }
+            // Old devices already heard these announcements under a period + bulletin-text key.
+            const datedKey = /^(planned:(?:tube|dlr|elizabeth-line|tram|cable-car):\d+):\d+:/.exec(key)?.[1];
+            if (datedKey) {
+              told[datedKey] = Math.max(told[datedKey] ?? 0, until);
+              delete told[key];
+            }
+          }
           for (const notice of strikes) {
             if (stopped || halted) break;
-            if (notice.occurrences.every(key => told[key])) {
-              // A live report may get a new validity period every few minutes.
-              // Keep it remembered while TfL continues reporting the strike.
-              if (notice.active) {
-                for (const key of notice.occurrences) if (told[key] < now + HOUR) told[key] = now + 3 * HOUR;
-              }
+            const report = notice.liveReport;
+            const rollingUntil = now + 3 * HOUR;
+            const until = notice.active && notice.publishedStart === undefined ? rollingUntil : notice.expires + 86400_000;
+            const remember = () => {
+              for (const key of notice.occurrences) told[key] = until;
+              if (report) told[report.key] = rollingUntil;
+              for (const alias of notice.aliases ?? []) told[alias] = notice.active ? rollingUntil : until;
+            };
+            // A line notice delivered since this period started also covers its onset.
+            const alreadyLive = report && told[report.key] >= report.from + 3 * HOUR;
+            const aliasUntil = notice.active ? (notice.publishedStart ?? now) + 3 * HOUR : now;
+            const heardAlias = notice.aliases?.some(key => told[key] >= aliasUntil);
+            if (notice.occurrences.every(key => told[key]) || alreadyLive || heardAlias) {
+              const liveKeys = report ? [report.key] : notice.occurrences;
+              if (((alreadyLive || heardAlias) && !told[notice.key])
+                  || notice.aliases?.some(key => (told[key] ?? 0) < (notice.active ? now + HOUR : until))
+                  || (notice.active && liveKeys.some(key => (told[key] ?? 0) < now + HOUR))) remember();
               continue;
             }
-            await deliver(`strike:${notice.key}`, strikePush(notice, now), () => {
-              for (const key of notice.occurrences) told[key] = notice.active ? now + 3 * HOUR : notice.expires + 86400_000;
-            });
+            await deliver(`strike:${notice.key}`, strikePush(notice, now), remember);
           }
         }
         // Forget alerts the phone no longer has.

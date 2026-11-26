@@ -117,12 +117,13 @@ minor delays, quiet for "good service again". Planned works on tomorrow's trips 
 7 pm the evening before. One notification per disruption, again only if it gets worse.
 The home page shows each saved line's status.
 
+**London strikes.** In **Line alerts → View London strikes**, see current and announced transport strikes grouped by month. Tap a date for London times and line reports. The board reads TfL directly, including its published strike calendar and 180 days of planned line notices. You can browse it without saved routes, notification permission or an alerts server.
+
 **London-wide strike alerts.** Turn on **London-wide strike alerts** in **Line alerts**
 and allow notifications. This works with an alerts server even when you have no saved lines.
-Beeline checks TfL's current notices and looks 30 days ahead across the Tube, London buses,
+Beeline checks TfL’s published strike calendar and looks 30 days ahead in line notices across the Tube, London buses,
 Elizabeth line, DLR, Overground, National Rail services listed by TfL, trams, river buses
-and cable car. Upcoming strike notifications give dates in London time. Ongoing action
-gets a Time Sensitive notification, including when a previously announced strike starts.
+and cable car. Each dated strike period gets a reminder during the 24 hours before it starts, even when it is part of an already-announced dispute. Times are shown in London time. When action starts, a Time Sensitive notification opens the strike list.
 
 **Departure boards.** Every boarding stop shows the departures around yours, the
 ones that have just gone too, filtered to those that stop where you get off, with
@@ -306,7 +307,7 @@ keeps to these limits, and changes should too:
   minute, plus planned works once an evening, and a line's station order (about 200 KB) only
   for lines a saved alert needs, kept a week.
   When a phone subscribes to citywide strikes, the server also checks live status across
-  all modes (cached for ten minutes) and rotates through dated forecasts in batches of
+  all modes and TfL’s published strike calendar (both cached for ten minutes), and rotates through dated forecasts in batches of
   up to 20 lines. All subscribed phones share these checks.
 - **Google**: kept inside the free monthly allowance (counted per Google month on the phone:
   deep search asks five ways under 700 requests, one under 900, none past 900).

@@ -18,7 +18,11 @@ struct AlertsView: View {
 
     var body: some View {
         if isSheet {
-            NavigationStack { content.toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done", systemImage: "checkmark") { dismiss(or: paneClose) } } } }
+            NavigationStack {
+                content
+                    .navigationDestination(isPresented: Bindable(store).showStrikeBoard) { LondonStrikesView() }
+                    .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done", systemImage: "checkmark") { dismiss(or: paneClose) } } }
+            }
         } else {
             content
         }
@@ -33,11 +37,11 @@ struct AlertsView: View {
         Form {
             Section {
                 Toggle("London-wide strike alerts", isOn: Binding(get: { store.strikeAlerts }, set: store.setStrikeAlerts))
-                if store.strikeAlerts {
-                    Link("TfL strike updates", destination: URL(string: "https://tfl.gov.uk/status-updates/strikes")!)
+                NavigationLink { LondonStrikesView() } label: {
+                    Label("View London strikes", systemImage: "calendar")
                 }
             } footer: {
-                Text("Get notified about strikes happening now or in the next 30 days, including on lines you haven’t saved.")
+                Text("Get London-wide alerts when strikes are announced, 24 hours before each strike period, and when it starts.")
             }
             if store.alerts.isEmpty {
                 // A removal that didn't reach the server is said here too, with Try again.
@@ -411,5 +415,89 @@ struct AlertIssueRow: View {
             }
         }
         .padding(.vertical, 2)
+    }
+}
+
+@MainActor @Observable
+private final class StrikeBoardStore {
+    static let shared = StrikeBoardStore()
+    var board: LondonStrikeBoard?
+    var problem: String?
+    var loading = false
+    private var lastAttempt: Date?
+
+    func refresh(key: String?, manual: Bool = false) async {
+        // A network scan covers hundreds of bus routes. Share it between visits and leave
+        // headroom under TfL's keyless per-minute limit when pulling repeatedly to refresh.
+        guard !loading else { return }
+        if !(manual && problem != nil), let lastAttempt, Date.now.timeIntervalSince(lastAttempt) < (manual || board == nil || problem != nil ? 65 : 600) { return }
+        lastAttempt = .now
+        loading = true
+        defer { loading = false }
+        do {
+            let next = try await LondonStrikes.fetch(key: key) { early in
+                if self.board == nil || self.board?.checkingForecast == true { self.board = early }
+            }
+            if let previous = board, next.events.isEmpty, !next.warnings.isEmpty, !previous.events.isEmpty {
+                problem = "Some TfL reports are unavailable. Showing the last strike list."
+            } else {
+                board = next
+                problem = nil
+            }
+        } catch is CancellationError {
+            lastAttempt = nil
+        } catch {
+            problem = board == nil ? "Couldn’t load TfL’s strike reports." : "Couldn’t refresh TfL’s reports. Showing the last strike list."
+        }
+    }
+}
+
+private struct LondonStrikesView: View {
+    @Environment(AppSettings.self) private var settings
+    @State private var store = StrikeBoardStore.shared
+    @State private var showInfo = false
+
+    var body: some View {
+        Group {
+            if let board = store.board {
+                StrikeBoardContent(board: board, problem: store.problem)
+            } else if let problem = store.problem {
+                ContentUnavailableView {
+                    Label("Strike reports unavailable", systemImage: "wifi.exclamationmark")
+                } description: { Text(problem) } actions: {
+                    Button("Try again") { Task { await store.refresh(key: settings.tflKey, manual: true) } }
+                }
+            } else {
+                ProgressView("Checking TfL…").frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
+        .navigationTitle("London strikes")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button("Sources", systemImage: "info.circle") { showInfo = true }
+            }
+        }
+        .sheet(isPresented: $showInfo) {
+            NavigationStack {
+                List {
+                    if let board = store.board {
+                        LabeledContent("Checked") { Text(StrikeBoardContent.format(board.checked, "d MMM yyyy, HH:mm")) }
+                    }
+                    LabeledContent("Times", value: "Europe/London")
+                    Link("TfL strike calendar", destination: LondonStrikes.guidance)
+                    Link("TfL service status", destination: URL(string: "https://tfl.gov.uk/tube-dlr-overground/status/")!)
+                }.navigationTitle("Sources").navigationBarTitleDisplayMode(.inline)
+                .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done", systemImage: "checkmark") { showInfo = false } } }
+            }.presentationDetents([.medium])
+        }
+        .refreshable { await store.refresh(key: settings.tflKey, manual: true) }
+        .task {
+            while !Task.isCancelled {
+                await store.refresh(key: settings.tflKey)
+                do { try await Task.sleep(for: .seconds(65)) } catch { return }
+            }
+        }
+        .keepsSheetWhenUnfolded(true)
     }
 }

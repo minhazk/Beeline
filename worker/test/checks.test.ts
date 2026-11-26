@@ -30,6 +30,7 @@ async function setup(apnsStatus: number | ((n: number) => number) = 200, status:
       const reason = apnsReason ?? ({ 410: "Unregistered", 400: "BadTopic", 429: "TooManyRequests", 503: "ServiceUnavailable" } as Record<number, string>)[code] ?? "InternalServerError";
       return new Response(code === 200 ? "" : JSON.stringify({ reason, ...(code === 410 && apnsGoneAt !== undefined ? { timestamp: apnsGoneAt } : {}) }), { status: code });
     }
+    if (url.endsWith("/status-updates/strikes")) return new Response("");
     if (url.includes("/Line/Mode/")) return Response.json(fixture("tfl-lines.json"));
     if (url.includes("/StopPoint/")) return Response.json(typeof status === "function" ? stopsNow : status === NOTICE ? [] : fixture("tfl-station-disruptions.json"));
     if (url.includes("/to/")) return Response.json(fixture("tfl-line-status-week.json"));
@@ -829,4 +830,58 @@ test("coinciding bus operator strikes each reach the phone across dated batches,
   const pushes = requests.filter(r => r.url.includes("push.apple.com")).map(r => JSON.parse(r.init!.body as string).aps.alert.body);
   assert.equal(pushes.length, 2);
   for (const operator of ["North", "West"]) assert.equal(pushes.filter(p => p.includes(operator)).length, 1);
+});
+
+test("each published strike period gets its own reminder and start push with the app closed", async () => {
+  const { env, db, requests } = await setup(200, [], "fixture", []);
+  await db.prepare("UPDATE devices SET strike_alerts = 1").run();
+  const recorded = globalThis.fetch;
+  const dates = [
+    "12:00 Thursday 17 to 11:59 Friday 18 December 2026",
+    "12:00 Saturday 19 to 11:59 Sunday 20 December 2026",
+  ];
+  let announced = [...dates], apiListsFirst = false;
+  globalThis.fetch = async (input, init) => {
+    const url = new URL(String(input));
+    if (url.pathname === "/status-updates/strikes") {
+      assert.equal(url.search, "");
+      const article = "<h2>Tube drivers’ strikes</h2><h2>Strike dates</h2><ul>" +
+        announced.map(date => `<li>${date}</li>`).join("") + "</ul>";
+      return new Response(`<script>self.__next_f.push(${JSON.stringify([1, article])})</script>`);
+    }
+    if (url.pathname.includes("/Line/")) {
+      const statuses = apiListsFirst ? [{ statusSeverity: 0, reason: "Tube drivers are planning strike action.",
+        validityPeriods: [{ fromDate: "2026-12-17T12:00:00Z", toDate: "2026-12-18T11:59:00Z" }] }] : [];
+      return Response.json([{ id: "circle", name: "Circle", modeName: "tube", lineStatuses: statuses }]);
+    }
+    return recorded(input, init);
+  };
+
+  async function check(iso: string, titles: string[]) {
+    requests.length = 0;
+    await runChecks(env, Date.parse(iso));
+    const pushes = requests.filter(r => r.url.includes("push.apple.com"));
+    const payloads = pushes.map(r => JSON.parse(r.init!.body as string));
+    assert.deepEqual(payloads.map(p => p.aps.alert.title), titles, iso);
+    assert.ok(payloads.every(p => p.alert === "london-strikes"));
+    return pushes.map(r => (r.init!.headers as Record<string, string>)["apns-collapse-id"]);
+  }
+
+  await check("2026-12-01T10:00:00Z", ["Upcoming strike · Tube", "Upcoming strike · Tube"]);
+  apiListsFirst = true;
+  await check("2026-12-16T11:58:00Z", []);
+  const first = await check("2026-12-16T12:00:00Z", ["Strike reminder · Tube"]);
+  await check("2026-12-16T12:02:00Z", []);
+  await check("2026-12-17T12:00:00Z", ["Strike disruption · Tube"]);
+  apiListsFirst = false;
+
+  // The second period was pulled from the calendar. No reminder until TfL reinstates it.
+  announced = [dates[0]];
+  await check("2026-12-18T12:00:00Z", []);
+  announced = dates;
+  const second = await check("2026-12-18T15:12:00Z", ["Strike reminder · Tube"]);
+  assert.notEqual(first[0], second[0]);
+  await check("2026-12-18T15:14:00Z", []);
+  await check("2026-12-19T12:00:00Z", ["Strike disruption · Tube"]);
+  await check("2026-12-19T12:02:00Z", []);
 });

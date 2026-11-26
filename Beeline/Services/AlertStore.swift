@@ -35,7 +35,10 @@ final class AlertStore {
     private(set) var cleanupProblem: String?
     private(set) var permission: UNNotificationSettings?
     /// Set when you tap one of these notifications.
-    var showAlerts = false
+    var showAlerts = false {
+        didSet { if !showAlerts { showStrikeBoard = false } }
+    }
+    var showStrikeBoard = false
 
     /// What the store reads and writes outside itself; tests give their own.
     struct Dependencies {
