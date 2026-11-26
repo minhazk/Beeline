@@ -140,6 +140,48 @@ struct AlertStoreTests {
         #expect(wire.requests.filter { $0.httpMethod == "PUT" }.count == 1, "registered: not sent again each time the app comes forward")
     }
 
+    @Test func londonStrikeAlertsCanBeTheOnlySubscription() async throws {
+        let wire = Wire(), defaults = Self.defaults(with: [])
+        defaults.set(Self.pushToken, forKey: "alerts.token")
+        let store = self.store(wire: wire, defaults: defaults, permission: Permission(.authorized))
+        wire.refusing["built.example.com"] = (400, #"{"error":"A registration needs at least one scheduled alert"}"#)
+        store.setStrikeAlerts(true)
+        await store.waitForSync()
+        #expect(store.syncProblem?.contains("Update the alerts server") == true)
+
+        wire.refusing = [:]
+        wire.agreement = Data(#"{"ok":true,"pushes":true,"strikeAlerts":true}"#.utf8)
+        store.didRegister(Data(repeating: 0xab, count: 32))
+        await store.waitForSync()
+        let request = try #require(wire.requests.last)
+        #expect(request.httpMethod == "PUT")
+        let data = try #require(request.httpBody)
+        let json = try JSONSerialization.jsonObject(with: data)
+        let body = try #require(json as? [String: Any])
+        #expect(body["strikeAlerts"] as? Bool == true)
+        #expect((body["alerts"] as? [Any])?.isEmpty == true)
+        #expect(store.syncProblem == nil)
+        #expect(self.store(defaults: defaults).strikeAlerts)
+
+        store.setStrikeAlerts(false)
+        await store.waitForSync()
+        #expect(wire.requests.last?.httpMethod == "DELETE")
+    }
+
+    @Test func removingTheLastLineKeepsLondonStrikeAlertsRegistered() async throws {
+        let wire = Wire()
+        let store = self.store(wire: wire, permission: Permission(.authorized))
+        store.setStrikeAlerts(true)
+        await store.waitForSync()
+        #expect(store.syncProblem?.contains("Update the alerts server") == true, "an older server only accepted the saved lines")
+
+        wire.agreement = Data(#"{"ok":true,"strikeAlerts":true}"#.utf8)
+        store.delete(try #require(store.alerts.first?.id))
+        await store.waitForSync()
+        #expect(wire.requests.map(\.httpMethod) == ["PUT", "PUT"])
+        #expect(store.syncProblem == nil)
+    }
+
     @Test func aPhoneNeverAskedIsNotRegisteredUntilItAgrees() async throws {
         let wire = Wire(), permission = Permission(.notDetermined)
         let store = store(wire: wire, registered: false, permission: permission)

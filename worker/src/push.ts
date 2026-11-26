@@ -2,6 +2,8 @@
 // through a Focus; minor delays and planned works are ordinary; "good service again" is quiet.
 
 import type { Alert, Issue } from "./types.ts";
+import type { StrikeBulletin } from "./strikes.ts";
+import { hash } from "./match.ts";
 
 export interface Push {
   payload: Record<string, unknown>;
@@ -25,6 +27,21 @@ const RELEVANCE = { closed: 1, delays: 0.8, minor: 0.4 } as const;
 const MAX_TITLE = 120;
 const MAX_SUBTITLE = 160;
 const MAX_BODY = 700;
+
+export function strikePush(notice: StrikeBulletin, now: number): Push {
+  return {
+    payload: {
+      aps: {
+        alert: { title: trim(notice.title, MAX_TITLE), body: trim(notice.detail, MAX_BODY) },
+        sound: "default",
+        "interruption-level": notice.active ? "time-sensitive" : "active",
+        "thread-id": "london-strikes",
+      },
+      alert: "london-strikes",
+    },
+    priority: 10, collapseId: `strike:${hash(notice.key)}`, expiration: Math.floor(Math.min(notice.expires, now + 3 * 3600_000) / 1000),
+  };
+}
 
 export function issuesPush(alert: Alert, issues: Issue[], now: number): Push {
   const [first, ...rest] = issues;

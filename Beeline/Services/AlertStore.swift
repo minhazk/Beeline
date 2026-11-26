@@ -10,14 +10,17 @@ import UIKit
 @MainActor @Observable
 final class AlertStore {
     static let shared = AlertStore()
+    private static let strikeServerUpdate = "Update the alerts server to receive London-wide strike notifications."
 
     private(set) var alerts: [RouteAlert] {
         didSet {
-            delivery = RouteAlert.Delivery(alerts)
+            delivery = RouteAlert.Delivery(alerts, strikeAlerts: strikeAlerts)
             save()
         }
     }
     private(set) var delivery: RouteAlert.Delivery
+    private(set) var strikeAlerts: Bool
+    private var hasSubscriptions: Bool { strikeAlerts || !delivery.ready.isEmpty }
     var canAddWatch: Bool { alerts.count < RouteAlert.maxAlerts }
 
     /// What TfL says about each alert, by id, from the server.
@@ -160,8 +163,10 @@ final class AlertStore {
     init(_ deps: Dependencies = Dependencies()) {
         self.deps = deps
         let saved = deps.defaults.data(forKey: "alerts").flatMap { try? JSONDecoder().decode([RouteAlert].self, from: $0) } ?? []
+        let strikesEnabled = deps.defaults.bool(forKey: "alerts.londonStrikes")
+        strikeAlerts = strikesEnabled
         alerts = saved
-        delivery = RouteAlert.Delivery(saved)
+        delivery = RouteAlert.Delivery(saved, strikeAlerts: strikesEnabled)
         token = deps.defaults.string(forKey: "alerts.token")
         startToken = deps.defaults.string(forKey: "alerts.startToken")
         registered = deps.defaults.string(forKey: "alerts.registered")
@@ -361,7 +366,7 @@ final class AlertStore {
         cleanupProblem = nil
         await oldSync?.value
         let note = await retryRemovals()?.value
-        if next != nil, !delivery.ready.isEmpty {
+        if next != nil, hasSubscriptions {
             await enablePush()
             sync()
             await refreshStatus(force: true)
@@ -383,7 +388,7 @@ final class AlertStore {
                 // is reconciled by sync(), never by a cleanup job from a previous launch: a
                 // removal owed for the token this phone is about to register there again waits,
                 // with its credentials, until that registration is made (and lets it go).
-                guard removal.server.url != server?.url || removal.pushToken != token || delivery.ready.isEmpty || pushOff else { continue }
+                guard removal.server.url != server?.url || removal.pushToken != token || !hasSubscriptions || pushOff else { continue }
                 do {
                     do {
                         try Self.acknowledged(try await send("DELETE", path: "devices/\(removal.pushToken)", to: removal.server))
@@ -425,7 +430,7 @@ final class AlertStore {
         if !alerts.contains(where: { $0.id == alert.id }) && !canAddWatch { return "Remove a watch before adding another. The limit is 30." }
         // An edit must leave room for all the other watches that are already being delivered.
         var remaining = delivery.ready.contains { $0.id == alert.id }
-            ? RouteAlert.Delivery(delivery.ready.filter { $0.id != alert.id }) : delivery
+            ? RouteAlert.Delivery(delivery.ready.filter { $0.id != alert.id }, strikeAlerts: strikeAlerts) : delivery
         return remaining.include(alert)
     }
 
@@ -444,7 +449,7 @@ final class AlertStore {
     }
 
     func delete(_ id: RouteAlert.ID) {
-        if delivery.ready.count == 1, delivery.ready.first?.id == id, holdsRegistration {
+        if !strikeAlerts, delivery.ready.count == 1, delivery.ready.first?.id == id, holdsRegistration {
             needsUnregister = true
         }
         alerts.removeAll { $0.id == id }
@@ -455,11 +460,21 @@ final class AlertStore {
         sync()
     }
 
+    func setStrikeAlerts(_ enabled: Bool) {
+        guard enabled != strikeAlerts else { return }
+        strikeAlerts = enabled
+        delivery = RouteAlert.Delivery(alerts, strikeAlerts: enabled)
+        defaults.set(enabled, forKey: "alerts.londonStrikes")
+        needsUnregister = !hasSubscriptions && holdsRegistration
+        if enabled { Task { await enablePush() } }
+        sync()
+    }
+
     // MARK: Push
 
     /// Asks once, then registers for a token on every launch (it can change).
     func enablePush() async {
-        guard !delivery.ready.isEmpty, currentServer() != nil else { return }
+        guard hasSubscriptions, currentServer() != nil else { return }
         permission = await deps.registerForPush()
         if let permission { authorization = permission.authorizationStatus }
         if pushOff, holdsRegistration { sync() }
@@ -485,7 +500,7 @@ final class AlertStore {
     /// removal that didn't get through last time is tried again.
     private func reconcilePush() {
         guard authorization != nil, currentServer() != nil else { return }
-        if delivery.ready.isEmpty {
+        if !hasSubscriptions {
             if holdsRegistration || needsUnregister { sync() }
             return
         }
@@ -528,7 +543,8 @@ final class AlertStore {
             guard !Task.isCancelled, let server = currentServer() else { return }
             do {
                 var pushesReady = true
-                if delivery.ready.isEmpty || pushOff {
+                var strikesSupported = true
+                if !hasSubscriptions || pushOff {
                     // What the server holds, or may: never a token it was never sent.
                     var tokens = maybeHeld
                     if let registered { tokens.insert(registered) }
@@ -554,7 +570,7 @@ final class AlertStore {
                     if let registered { former.insert(registered) }
                     former.remove(token)
                     let body = try JSONEncoder().encode(RouteAlert.Registration(environment: Self.environment, timeZone: TimeZone.current.identifier,
-                                                                                alerts: delivery.ready.map(RouteAlert.Wire.init), startToken: startToken))
+                                                                                alerts: delivery.ready.map(RouteAlert.Wire.init), startToken: startToken, strikeAlerts: strikeAlerts ? true : nil))
                     noteHolder(server)
                     maybeHeld.insert(token)
                     // The new token first: the server moves this phone's registration to it, so a
@@ -563,6 +579,8 @@ final class AlertStore {
                     let answer: Data
                     do {
                         answer = try await send("PUT", path: "devices/\(token)", body: body, to: server)
+                    } catch AlertError.server("A registration needs at least one scheduled alert", 400) where strikeAlerts && delivery.ready.isEmpty {
+                        throw AlertError.server(Self.strikeServerUpdate, status: 400)
                     } catch AlertError.server(_, let status) where status == 409 && !former.isEmpty {
                         // A server from before registrations moved with their phone keeps one phone
                         // to an invitation, and says so without a code: the old token makes room
@@ -572,7 +590,9 @@ final class AlertStore {
                         try Task.checkCancellation()
                         answer = try await send("PUT", path: "devices/\(token)", body: body, to: server)
                     }
-                    pushesReady = try Self.acknowledged(answer).pushes != false
+                    let acknowledgement = try Self.acknowledged(answer)
+                    pushesReady = acknowledgement.pushes != false
+                    strikesSupported = !strikeAlerts || acknowledgement.strikeAlerts == true
                     try Task.checkCancellation()
                     // The old ones are kept as "may hold" before `registered` moves on from
                     // them, so each stays on record until its own removal is answered.
@@ -591,8 +611,9 @@ final class AlertStore {
                     }
                 }
                 syncProblem = pushesReady ? nil : "This alert server has no push key yet, so it can't send notifications."
+                if pushesReady && !strikesSupported { syncProblem = Self.strikeServerUpdate }
                 // Notifications may have been turned back on while a removal was on its way.
-                if !Task.isCancelled, authorization != nil, !pushOff, !delivery.ready.isEmpty, registered == nil, token != nil { sync() }
+                if !Task.isCancelled, authorization != nil, !pushOff, hasSubscriptions, registered == nil, token != nil { sync() }
             } catch is CancellationError {
             } catch let error as URLError where error.code == .cancelled {
             } catch {
@@ -641,6 +662,7 @@ final class AlertStore {
     struct Acknowledgement: Decodable {
         var ok: Bool?
         var pushes: Bool?
+        var strikeAlerts: Bool?
         var status: Int?
     }
 
@@ -657,7 +679,7 @@ final class AlertStore {
         let active = currentServer()
         if !changingServer { _ = retryRemovals() }
         guard active != nil else { return }
-        if delivery.ready.isEmpty {
+        if !hasSubscriptions {
             if holdsRegistration || needsUnregister { sync() }
             return
         }

@@ -28,10 +28,10 @@ export interface StationDisruption {
 const BASE = "https://api.tfl.gov.uk";
 const USER_AGENT = "Beeline alerts (personal journey planner)";
 
-export function lineStatusURL(lineIds: string[], range?: { from: number; to: number }): string {
+export function lineStatusURL(lineIds: string[], range?: { from: number; to: number }, detail = true): string {
   const ids = [...new Set(lineIds)].sort().map(encodeURIComponent).join(",");
   const span = range ? `/${iso(range.from)}/to/${iso(range.to)}` : "";
-  return `${BASE}/Line/${ids}/Status${span}?detail=true`;
+  return `${BASE}/Line/${ids}/Status${span}?detail=${detail}`;
 }
 
 /** Every service pattern on a line, both ways, with each station's ids, names and position. */
@@ -191,7 +191,7 @@ export function parseLineStatuses(json: unknown): LineStatus[] {
       lineName: text(line.name),
       severity: typeof status.statusSeverity === "number" ? status.statusSeverity : NaN,
       summary: text(status.statusSeverityDescription),
-      reason: text(status.reason),
+      reason: text(status.reason) || text(status.disruption?.description),
       planned: status.disruption?.category === "PlannedWork",
       periods: items(status.validityPeriods).flatMap((p) => {
         const from = time(p.fromDate), to = time(p.toDate);

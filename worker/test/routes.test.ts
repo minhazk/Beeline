@@ -449,3 +449,23 @@ test("status: TfL failing every query is a 503, not a list of unchecked alerts",
   assert.equal(code, 503);
   assert.match(body.error, /TfL/);
 });
+
+test("London-wide strikes can be the only subscription and follow the phone through token rotation", async () => {
+  const db = fakeDB(), env = { DB: db, APP_TOKEN: "app-token" };
+  const registration = { ...contract(), alerts: [], strikeAlerts: true };
+  const before = upstreamRequests.length;
+  const saved = await call(env, "PUT", `/v1/devices/${token}`, mine, registration);
+  assert.equal(saved.status, 200);
+  assert.equal((await saved.json() as any).strikeAlerts, true);
+  assert.equal(upstreamRequests.length, before, "no saved rail lines to validate");
+  assert.equal(db.rows.get(token)!.strike_alerts, 1);
+  assert.equal((await call(env, "POST", `/v1/devices/${token}/test`, mine)).status, 503, "a strike-only test reaches the APNs configuration check");
+
+  const next = "ed".repeat(32);
+  await db.prepare("UPDATE devices SET updated_at = updated_at - 60000").run();
+  assert.equal((await call(env, "PUT", `/v1/devices/${next}`, mine, registration)).status, 200);
+  assert.equal(db.rows.get(next)!.strike_alerts, 1);
+  assert.equal(db.rows.get(token), undefined);
+  assert.equal((await call(env, "PUT", `/v1/devices/${next}`, mine, contract())).status, 200);
+  assert.equal(db.rows.get(next)!.strike_alerts, 0, "older clients register for their saved lines only");
+});

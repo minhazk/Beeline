@@ -31,9 +31,18 @@ struct AlertsView: View {
 
     private var contentForm: some View {
         Form {
+            Section {
+                Toggle("London-wide strike alerts", isOn: Binding(get: { store.strikeAlerts }, set: store.setStrikeAlerts))
+                if store.strikeAlerts {
+                    Link("TfL strike updates", destination: URL(string: "https://tfl.gov.uk/status-updates/strikes")!)
+                }
+            } footer: {
+                Text("Get notified about strikes happening now or in the next 30 days, including on lines you haven’t saved.")
+            }
             if store.alerts.isEmpty {
                 // A removal that didn't reach the server is said here too, with Try again.
                 if let problem = store.syncProblem { trouble(problem) }
+                if store.strikeAlerts && store.isConfigured { notifications }
                 emptyState
                 if store.isConfigured { server } else { connect }
             } else {
