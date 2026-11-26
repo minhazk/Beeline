@@ -214,15 +214,19 @@ final class NotificationPresenter: NSObject, UNUserNotificationCenterDelegate, S
         return [.banner, .list, .sound]
     }
 
-    func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse) async {
+    func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse,
+                                withCompletionHandler completionHandler: @escaping @Sendable () -> Void) {
         let request = response.notification.request
-        if request.content.categoryIdentifier == TripAlerts.offerCategory {
-            // Only the offer Beeline itself put up on this phone: a push that borrows the
-            // category can't switch or keep a route.
-            guard request.identifier == TripAlerts.offerID, !(request.trigger is UNPushNotificationTrigger) else { return }
-            let action = response.actionIdentifier
-            await MainActor.run {
-                // Opened cold by the tap: the trip isn't back yet, so the tap waits for it (`TripResume`).
+        let category = request.content.categoryIdentifier
+        let localOffer = request.identifier == TripAlerts.offerID && !(request.trigger is UNPushNotificationTrigger)
+        let action = response.actionIdentifier
+        let alert = request.content.userInfo["alert"] as? String
+        // UIKit resumes the cold-launch transition in this completion. The async delegate
+        // bridge can invoke it on a cooperative thread after MainActor.run has returned.
+        Task { @MainActor in
+            defer { completionHandler() }
+            if category == TripAlerts.offerCategory {
+                guard localOffer else { return }
                 let tapped: TripResume.OfferAction? = action == TripAlerts.switchAction ? .switch : action == TripAlerts.keepAction ? .keep : nil
                 guard let tapped else { return }
                 if let trip = LiveTrip.current {
@@ -230,10 +234,11 @@ final class NotificationPresenter: NSObject, UNUserNotificationCenterDelegate, S
                 } else {
                     TripResume.hold(tapped)
                 }
+                return
             }
-            return
+            guard let alert else { return }
+            AlertStore.shared.showStrikeBoard = alert == "london-strikes"
+            AlertStore.shared.showAlerts = true
         }
-        guard response.notification.request.content.userInfo["alert"] is String else { return }
-        await MainActor.run { AlertStore.shared.showAlerts = true }
     }
 }

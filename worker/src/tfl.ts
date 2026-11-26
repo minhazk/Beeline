@@ -83,7 +83,15 @@ export function fetchTfL(url: string, ttl: number, access?: string | TfLAccess, 
   return ask(url, ttl, local ? { ...asked, key: undefined } : asked, timeoutMs, local);
 }
 
-async function ask(url: string, ttl: number, access: TfLAccess, timeoutMs: number | undefined, local: boolean): Promise<unknown> {
+/** The public strike calendar is HTML on TfL's website. Its requests share the cron
+ * budget and edge cache, but the Unified API key must never be sent to it. */
+export async function fetchStrikeCalendar(access: TfLAccess): Promise<string> {
+  const url = (localBase ?? "https://tfl.gov.uk") + "/status-updates/strikes";
+  return await ask(url, 600, { ...access, key: undefined }, 6000, !!localBase, "text/html") as string;
+}
+
+async function ask(url: string, ttl: number, access: TfLAccess, timeoutMs: number | undefined, local: boolean,
+                   contentType: "application/json" | "text/html" = "application/json"): Promise<unknown> {
   const appKey = access.key;
   const spend = (requests: number) => {
     if (!access.ops) return;
@@ -95,12 +103,12 @@ async function ask(url: string, ttl: number, access: TfLAccess, timeoutMs: numbe
   const key = new Request(url);
   if (edge) spend(1);
   const hit = await edge?.match(key);
-  if (hit) return hit.json();
+  if (hit) return contentType === "text/html" ? hit.text() : hit.json();
   // TfL itself, and the save that follows.
   spend(edge ? 2 : 1);
   // Carries the key, so it's never logged or put in an error: `url` is.
   const target = appKey ? `${url}${url.includes("?") ? "&" : "?"}app_key=${encodeURIComponent(appKey)}` : url;
-  const get = () => fetch(target, { headers: { "User-Agent": USER_AGENT, Accept: "application/json" }, ...(local ? { redirect: "manual" as const } : {}),
+  const get = () => fetch(target, { headers: { "User-Agent": USER_AGENT, Accept: contentType }, ...(local ? { redirect: "manual" as const } : {}),
     ...(timeoutMs ? { signal: AbortSignal.timeout(timeoutMs) } : {}) });
   let body: string;
   try {
@@ -123,9 +131,8 @@ async function ask(url: string, ttl: number, access: TfLAccess, timeoutMs: numbe
     }
     throw error;
   }
-  // And only one that reads as JSON is kept for everyone else.
-  const parsed: unknown = JSON.parse(body);
-  await edge?.put(key, new Response(body, { headers: { "Cache-Control": `max-age=${ttl}`, "Content-Type": "application/json" } }));
+  const parsed: unknown = contentType === "text/html" ? body : JSON.parse(body);
+  await edge?.put(key, new Response(body, { headers: { "Cache-Control": `max-age=${ttl}`, "Content-Type": contentType } }));
   return parsed;
 }
 
