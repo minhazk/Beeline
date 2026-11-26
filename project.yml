@@ -44,6 +44,29 @@ targets:
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
     dependencies:
       - target: BeelineWidgets
+      - target: BeelineNotifications
+  # Puts a line's disc on its alert as it arrives (a notification service extension).
+  BeelineNotifications:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: BeelineNotifications
+      - path: Beeline/Shared/LineSender.swift
+    info:
+      path: BeelineNotifications/Info.plist
+      properties:
+        CFBundleName: Beeline
+        CFBundleDisplayName: "$(BEELINE_DISPLAY_NAME)"
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.usernotifications.service
+          NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).NotificationService
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: "$(BEELINE_BUNDLE_ID).notifications"
+        TARGETED_DEVICE_FAMILY: "1"
+        SKIP_INSTALL: YES
   # The trip's Live Activity (Lock Screen and Dynamic Island).
   BeelineWidgets:
     type: app-extension

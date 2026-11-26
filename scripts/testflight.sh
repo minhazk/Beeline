@@ -78,7 +78,7 @@ if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   fi
   # Every file in these folders is compiled or bundled, tracked or not: a stray source file, or
   # a key dropped beside them, would ship too.
-  STRAY="$(git status --porcelain --untracked-files=all --ignored=matching -- Beeline BeelineWidgets | grep -v '\.DS_Store$' || true)"
+  STRAY="$(git status --porcelain --untracked-files=all --ignored=matching -- Beeline BeelineWidgets BeelineNotifications | grep -v '\.DS_Store$' || true)"
   if [[ -n "$STRAY" ]]; then
     echo "Refusing: files git doesn't track would be built into the app:" >&2
     echo "$STRAY" >&2

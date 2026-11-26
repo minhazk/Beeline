@@ -18,16 +18,34 @@ export interface StrikeBulletin {
   title: string;
   detail: string;
   expires: number;
+  /** "Tube", "London buses"; a published bulletin's own heading when it names no network. */
+  network: string;
+  /** TfL's mode, when the strike is one network's. */
+  mode?: string;
+  /** The dated period (ms), for one still to come or one TfL published dates for. */
+  from?: number;
+  to?: number;
+  /** The lines or routes TfL reports it on: "Bakerloo", "Route 25". None for a strike TfL
+   * published dates for and that hasn't started: that one is the network's, whichever lines
+   * have said so yet. */
+  lines: string[];
+  /** For one happening now: the other rail networks with good service on every line. */
+  running?: string[];
+  /** The day-before reminder of a period already announced. */
+  reminder?: boolean;
 }
 
-interface StrikeGroup extends StrikeBulletin {
+interface StrikeGroup extends Omit<StrikeBulletin, "lines" | "mode" | "from"> {
   lines: Set<string>;
   mode: string;
   from: number;
   aliases: Set<string>;
 }
 
-interface NetworkStrike extends StrikeBulletin {
+export interface NetworkStrike extends StrikeBulletin {
+  /** Which strike this is a period of: TfL's published heading, or the network and lines a
+   * line notice is on. Periods of the same one, first heard of together, are told together. */
+  strike: string;
   /** New bus routes may join a separate operator's strike while another is ongoing. */
   occurrences: string[];
   aliases?: string[];
@@ -86,24 +104,38 @@ function collect(found: Map<string, StrikeGroup>, status: LineStatus, mode: stri
     }
     const description = reason.toLowerCase().startsWith(line.toLowerCase()) ? reason : `${line}: ${reason}`;
     found.set(key, {
-      key, active, from, mode, aliases: new Set(alias ? [alias] : []), lines: new Set([line]), title: active ? `Strike disruption · ${network}` : `Upcoming strike · ${network}`,
+      key, active, from, ...(active ? {} : { to }), mode, network, aliases: new Set(alias ? [alias] : []), lines: new Set([line]), title: active ? `Strike disruption · ${network}` : `Upcoming strike · ${network}`,
       detail: active ? description : `${dateTime.format(from)} – ${dateTime.format(to)} (London time). ${description}`,
       expires: active ? Math.min(to, now + 2 * 3_600_000) : from,
     });
   }
 }
 
-async function lineStrikes(now: number, access: TfLAccess, published: Promise<PublishedStrike[]>): Promise<StrikeGroup[]> {
+// The rail networks worth saying are still running during a strike on another, as people say them.
+const railNetworks: Record<string, string> = { tube: "Tube", "elizabeth-line": "Elizabeth", dlr: "DLR", overground: "Overground" };
+// TfL's statusSeverity for a line with nothing wrong: good service, no issues.
+const GOOD = new Set([10, 18]);
+
+async function lineStrikes(now: number, access: TfLAccess, published: Promise<PublishedStrike[]>): Promise<{ groups: StrikeGroup[]; running: Map<string, string> }> {
   const found = new Map<string, StrikeGroup>();
+  // Each rail network TfL answered for in full, and whether every line of it has good service.
+  const good = new Map<string, boolean>();
   try {
     const live = await fetchTfL(cityStatus, 600, access, 6000);
-    if (!Array.isArray(live)) return [];
+    if (!Array.isArray(live)) return { groups: [], running: new Map() };
     const calendar = await published;
     const modes = new Map<string, string>();
     for (const line of live) {
-      if (!lineStatusesComplete([line]) || !Object.hasOwn(networks, line.modeName)) continue;
+      const rail = Object.hasOwn(railNetworks, line?.modeName);
+      if (!lineStatusesComplete([line]) || !Object.hasOwn(networks, line.modeName)) {
+        // A line TfL didn't answer for: its network isn't said to be running.
+        if (rail) good.set(line.modeName, false);
+        continue;
+      }
       modes.set(line.id, line.modeName);
-      for (const status of parseLineStatuses([line])) collect(found, status, line.modeName, now, true, calendar);
+      const statuses = parseLineStatuses([line]);
+      if (rail) good.set(line.modeName, (good.get(line.modeName) ?? true) && statuses.length > 0 && statuses.every((s) => GOOD.has(s.severity)));
+      for (const status of statuses) collect(found, status, line.modeName, now, true, calendar);
     }
 
     // TfL's dated endpoint accepts about 20 line IDs. Rotate through the network
@@ -124,7 +156,8 @@ async function lineStrikes(now: number, access: TfLAccess, published: Promise<Pu
   } catch {
     // If a dated batch fails, the citywide current answer is still usable.
   }
-  return [...found.values()];
+  const running = new Map(Object.entries(railNetworks).filter(([mode]) => good.get(mode)));
+  return { groups: [...found.values()], running };
 }
 
 // These networks publish network-wide strikes. Buses and National Rail can have
@@ -135,6 +168,8 @@ const networkHeadings: [string, RegExp][] = [
   ["cable-car", /\bcable car\b/i],
 ];
 const singleNetworks = new Set(networkHeadings.map(([mode]) => mode));
+/** A strike on one of these is the whole network's, so its dated periods are one strike. */
+export const networkWide = (mode: string | undefined) => mode !== undefined && singleNetworks.has(mode);
 
 const operatorHeadings: [string, RegExp][] = [
   ["river-bus", /\b(river bus|ferry)\b/i], ["bus", /\b(bus|buses)\b/i], ["overground", /\boverground\b/i],
@@ -164,13 +199,15 @@ function lineBulletin(group: StrikeGroup): NetworkStrike {
   return {
     key, aliases: [...group.aliases], active: group.active, title: group.title, expires: group.expires,
     detail: names.length > 1 ? `${affected}. ${group.detail}` : group.detail,
+    network: group.network, mode: group.mode, lines: names, strike: `lines:${group.mode}:${names.join(",")}`,
+    ...(group.active ? {} : { from: group.from, to: group.to }),
     occurrences: key === "live:bus" ? names.map(line => `${key}:${line}`) : [key],
   };
 }
 
 export async function londonStrikes(now: number, access: TfLAccess): Promise<NetworkStrike[]> {
   const published = fetchStrikeCalendar(access).then(publishedStrikes).catch(() => []);
-  const [groups, calendar] = await Promise.all([lineStrikes(now, access, published), published]);
+  const [{ groups, running }, calendar] = await Promise.all([lineStrikes(now, access, published), published]);
   const notices = new Map<string, NetworkStrike>();
   for (const group of groups) {
     const notice = lineBulletin(group);
@@ -189,15 +226,27 @@ export async function londonStrikes(now: number, access: TfLAccess): Promise<Net
       key, active, expires: active ? event.to : event.from,
       title: prior?.title ?? (active ? `Strike disruption · ${network}` : `Upcoming strike · ${network}`),
       detail: prior?.detail ?? `${event.title}: ${dateTime.format(event.from)} – ${dateTime.format(event.to)} (London time).`,
+      network, ...(mode ? { mode } : {}), from: event.from, to: event.to, lines: active ? prior?.lines ?? [] : [],
+      strike: `published:${event.title.toLowerCase()}`,
       occurrences: [key], aliases: prior?.aliases, publishedStart: event.from, liveReport: active && mode ? { key: reportKey, from: event.from } : undefined,
     });
   }
-  return [...notices.values()].map(notice => {
-    if (notice.active || notice.expires - now > DAY) return notice;
+  // The network a notice is about: its mode, or the one its published heading names.
+  const networkOf = (notice: NetworkStrike) => notice.mode ?? [...networkHeadings, ...operatorHeadings].find(([, pattern]) => pattern.test(notice.network))?.[0];
+  const striking = new Set([...notices.values()].filter((notice) => notice.active).map(networkOf));
+  return [...notices.values()].map((notice): NetworkStrike => {
+    if (notice.active) {
+      // Never a network that is itself on strike, whatever its lines' statuses say yet; and
+      // nothing at all beside a strike whose own network can't be told.
+      if (striking.has(undefined)) return notice;
+      const others = [...running].filter(([mode]) => !striking.has(mode)).map(([, name]) => name);
+      return others.length ? { ...notice, running: others } : notice;
+    }
+    if (notice.expires - now > DAY) return notice;
     // A new subscriber inside the reminder window gets one useful push. A subscriber
     // who already received the announcement still gets this separate reminder.
     const key = `reminder:${notice.key}`;
-    return { ...notice, key, occurrences: [key], aliases: notice.aliases?.map(alias => `reminder:${alias}`),
+    return { ...notice, key, occurrences: [key], aliases: notice.aliases?.map(alias => `reminder:${alias}`), reminder: true,
       title: notice.title.replace("Upcoming strike", "Strike reminder") };
   }).sort((a, b) => Number(b.active) - Number(a.active) || a.expires - b.expires);
 }

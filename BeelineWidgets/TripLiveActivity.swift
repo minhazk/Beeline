@@ -89,6 +89,11 @@ enum Palette {
         })
     }
 
+    /// A closure in red, delays in orange.
+    static func trouble(_ trouble: NextTrainAttributes.ContentState.Trouble) -> Color {
+        trouble.severity == "closed" ? dark(.systemRed) : warning
+    }
+
     static func line(_ hex: String?) -> Color? {
         rgb(hex).map { Color(red: $0.r, green: $0.g, blue: $0.b) }
     }

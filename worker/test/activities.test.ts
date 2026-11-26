@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
 import { timingSafeEqual } from "node:crypto";
 import { afterEach, test } from "node:test";
-import { attributesFor, dueStarts, followFor, runActivities, shortNotice, staleDate, startPush, updatePush, urgency, type ContentState } from "../src/activities.ts";
+import { attributesFor, dueStarts, followFor, runActivities, shortNotice, staleDate, startPush, troubleFor, updatePush, urgency, withStations, type ContentState } from "../src/activities.ts";
 import type { Env } from "../src/checks.ts";
 import worker from "../src/index.ts";
-import { forgetLineMaps } from "../src/linemap.ts";
-import type { Alert } from "../src/types.ts";
+import { forgetLineMaps, parseLineMap } from "../src/linemap.ts";
+import type { Alert, Issue } from "../src/types.ts";
 import { fixture, sqliteD1 } from "./helpers.ts";
 
 (crypto.subtle as any).timingSafeEqual ??= (a: ArrayBuffer, b: ArrayBuffer) => timingSafeEqual(Buffer.from(a), Buffer.from(b));
@@ -73,6 +73,28 @@ test("notices say the trouble in a few words", () => {
   assert.equal(shortNotice("Central line: severe delays", "Central line"), "Severe delays");
   assert.equal(shortNotice("Bank closed (Northern line)", "Northern line"), "Bank closed (Northern line)");
   assert.equal(shortNotice(`Central line: ${"very ".repeat(20)}late`, "Central line").length, 40);
+});
+
+test("trouble on the way is placed on the ride, with why", () => {
+  const map = parseLineMap("central", fixture("tfl-sequence-central.json"))!;
+  const ride = withStations(contract().attributes.follow, map);
+  const issue = (detail: string): Issue => ({ signature: "x", severity: "delays", line: "Central line", title: "Central line: severe delays", detail });
+  // Redbridge to Liverpool Street is eight stations; Leytonstone is the third.
+  assert.equal(ride.stations.length, 8);
+  assert.deepEqual(troubleFor(issue("Severe delays between Leytonstone and Liverpool Street due to a signal failure at Leytonstone."), ride, map), contract()["content-state"].trouble);
+  // A stretch that only reaches the first stations of yours, or the other way round as TfL wrote it.
+  assert.deepEqual(troubleFor(issue("Severe delays between Hainault and Leytonstone."), ride, map).span, [0, 0.29]);
+  // Of several stretches a notice names, the one your ride is on, with every place it could end.
+  assert.deepEqual(troubleFor(issue("Severe delays between North Acton and Ealing Broadway / West Ruislip and between, Leytonstone and Epping / Hainault via Newbury Park."), ride, map),
+    { severity: "delays", from: "Leytonstone", to: "Epping / Hainault", span: [0, 0.29] });
+  // No stretch named, or one that isn't on the line: the whole ride, so no span.
+  assert.deepEqual(troubleFor(issue("Severe delays due to a faulty train."), ride, map), { severity: "delays", cause: "Faulty train" });
+  assert.deepEqual(troubleFor(issue("Severe delays between Narnia and Leytonstone."), ride, map), { severity: "delays", from: "Narnia", to: "Leytonstone" });
+  assert.deepEqual(troubleFor(issue("Severe delays between Leytonstone and Liverpool Street."), ride, undefined), { severity: "delays", from: "Leytonstone", to: "Liverpool Street" });
+  // News of where it is, with the same few words, is still news.
+  const shown: ContentState = { trains: [], notice: "Severe delays", trouble: { severity: "delays", span: [0, 0.5] }, updated: s(NOW), live: true };
+  assert.equal(urgency(shown, { ...shown, trouble: { severity: "delays", span: [0, 1] } }, NOW), 5);
+  assert.equal(urgency(shown, { ...shown, updated: s(NOW) + 60 }, NOW), 0);
 });
 
 test("a saved line starts one when its time begins, once, and not in its last ten minutes", () => {

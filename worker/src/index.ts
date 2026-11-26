@@ -8,7 +8,7 @@ import { canPush, send } from "./apns.ts";
 import { emptyState, runChecks, tflRequests, type Env } from "./checks.ts";
 import { loadLineMaps } from "./linemap.ts";
 import { issuesFor, issuesInRanges, linesToPlace } from "./match.ts";
-import { issuesPush, lineList, strikePush } from "./push.ts";
+import { issuesPush, strikeTestPush, testPush } from "./push.ts";
 import { activeWindows, during, eachWay, travelRanges } from "./schedule.ts";
 import { useLocalTfL } from "./tfl.ts";
 import { lineCatalog, lineChecks, stationChecks, TfLUnavailable, validateLines } from "./linechecks.ts";
@@ -250,10 +250,7 @@ app.post("/v1/devices/:token/test", async (c) => {
   // Good service is said only of a line TfL answered for.
   const known = withIssues ?? statuses[0];
   const alert = alerts.find((a) => a.id === known?.id) ?? alerts[0];
-  const good = known ? `Good service on ${lineList(alert)} now. ` : "";
-  const issues: Issue[] = withIssues?.issues.map((i) => ({ ...i, signature: "test", line: "", from: undefined })) ?? [
-    { signature: "test", severity: "delays", line: "", title: "Test: alerts are on", detail: `${good}A closure or delay will come through like this.` },
-  ];
+  const issues: Issue[] | undefined = withIssues?.issues.map((i) => ({ ...i, signature: "test", line: "", from: undefined }));
   if (!canPush(c.env)) return c.json({ error: "The alert server has no push key yet, so it can't send notifications." }, 503);
   const current = await c.env.DB.prepare("SELECT revision FROM devices WHERE token = ?1 AND secret_hash = ?2")
     .bind(token, hash).first<{ revision: string }>();
@@ -262,9 +259,9 @@ app.post("/v1/devices/:token/test", async (c) => {
     return c.json({ error: "This phone isn't registered yet" }, 404);
   }
   if (current.revision !== row.revision) return c.json({ error: "These alerts changed. Try the test again." }, 409);
-  const push = alert ? { ...issuesPush(alert, issues, now), collapseId: `${alert.id}-test` } : strikePush({
-    key: "test", title: "Test · London-wide strike alerts", detail: "Beeline will notify you about upcoming and ongoing transport strikes.", active: false, expires: now + 300_000,
-  }, now);
+  const push = !alert ? strikeTestPush(now)
+    : issues ? { ...issuesPush(alert, issues, now), collapseId: `${alert.id}-test` }
+    : testPush(alert, known !== undefined, now);
   const result = await send(c.env, token, row.environment, push, now);
   // Apple says the app is gone from that phone: so is its registration, unless it registered
   // after Apple last looked.

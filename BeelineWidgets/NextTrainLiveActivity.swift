@@ -6,6 +6,8 @@ import WidgetKit
 /// at a glance, with a countdown to the next one. The countdown, and the line filling in to the
 /// first train, run on their own; a push from the alerts server brings news (a train gone, a new
 /// estimate, a cancellation), and the stale date makes the phone look again as the first leaves.
+/// When the server reports trouble on the way, the card says that instead: how bad, where on your
+/// ride and why, with the countdown to the next train kept beside it.
 struct NextTrainLiveActivity: Widget {
     var body: some WidgetConfiguration {
         ActivityConfiguration(for: NextTrainAttributes.self) { context in
@@ -30,15 +32,27 @@ struct NextTrainLiveActivity: Widget {
                 }
                 DynamicIslandExpandedRegion(.bottom) {
                     VStack(spacing: 6) {
-                        Timeline(attributes: attributes, state: state, isStale: context.isStale)
-                        if let notice = state.notice { NoticeLine(text: notice) }
+                        if let trouble = state.trouble, let notice = state.notice {
+                            NoticeLine(text: trouble.cause.map { "\(notice) · \($0)" } ?? notice, color: Palette.trouble(trouble))
+                            RideStrip(attributes: attributes, trouble: trouble)
+                        } else {
+                            Timeline(attributes: attributes, state: state, isStale: context.isStale)
+                            if let notice = state.notice { NoticeLine(text: notice) }
+                        }
                     }
                     .padding(.horizontal, 10)
                 }
             } compactLeading: {
                 LineDot(attributes: attributes, size: 22).accessibilityLabel("\(attributes.line) from \(attributes.stop)")
             } compactTrailing: {
-                if let next {
+                if let trouble = state.trouble {
+                    // Trouble first: the countdown is a glance at the Lock Screen away.
+                    Text(trouble.word(for: state.notice))
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(Palette.trouble(trouble))
+                        .frame(maxWidth: 60)
+                        .accessibilityLabel(state.notice ?? "Disruption")
+                } else if let next {
                     Minutes(train: next)
                         .font(.footnote.weight(.semibold))
                         .frame(maxWidth: 60)
@@ -60,6 +74,14 @@ private struct NextTrainLockScreen: View {
 
     var body: some View {
         let next = state.upcoming(at: .now).first { !$0.cancelled }
+        if let trouble = state.trouble, let notice = state.notice {
+            TroubleCard(attributes: attributes, state: state, trouble: trouble, notice: notice, next: next, isStale: isStale)
+        } else {
+            trains(next: next)
+        }
+    }
+
+    private func trains(next: NextTrainAttributes.ContentState.Train?) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 6) {
                 LinePill(attributes: attributes)
@@ -182,6 +204,124 @@ private struct Timeline: View {
     }
 }
 
+/// Trouble on the way, in place of the trains: the line's disc and how bad it is, your ride as a
+/// strip with the troubled stretch broken up, and why. The next train's countdown stays.
+private struct TroubleCard: View {
+    var attributes: NextTrainAttributes
+    var state: NextTrainAttributes.ContentState
+    var trouble: NextTrainAttributes.ContentState.Trouble
+    var notice: String
+    var next: NextTrainAttributes.ContentState.Train?
+    var isStale: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            HStack(spacing: 10) {
+                LineDot(attributes: attributes, size: 32)
+                VStack(alignment: .leading, spacing: 0) {
+                    Text(notice).font(.headline).foregroundStyle(Palette.trouble(trouble)).lineLimit(1).minimumScaleFactor(0.8)
+                    Text(attributes.towards.map { "\(attributes.line) · \(attributes.stop) → \($0)" } ?? "\(attributes.line) · \(attributes.stop)")
+                        .font(.footnote)
+                        .foregroundStyle(Palette.secondaryLabel)
+                        .lineLimit(1)
+                }
+                Spacer(minLength: 4)
+                if let next {
+                    VStack(alignment: .trailing, spacing: 0) {
+                        Minutes(train: next).font(.title3.weight(.bold))
+                        Text("next train").font(.caption2).foregroundStyle(Palette.secondaryLabel)
+                    }
+                    .fixedSize()
+                    .accessibilityElement(children: .combine)
+                }
+            }
+            RideStrip(attributes: attributes, trouble: trouble)
+            HStack(spacing: 6) {
+                Text(trouble.cause ?? stretch ?? "On your ride")
+                    .font(.footnote)
+                    .foregroundStyle(Palette.secondaryLabel)
+                    .lineLimit(1)
+                Spacer(minLength: 4)
+                Freshness(state: state, isStale: isStale)
+            }
+        }
+        .foregroundStyle(Palette.label)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+        .accessibilityElement(children: .combine)
+    }
+
+    private var stretch: String? {
+        guard let from = trouble.from, let to = trouble.to else { return nil }
+        return "\(from) → \(to)"
+    }
+}
+
+/// Your ride from where you board to where you get off, in the line's colour: whole where trains
+/// run as usual, broken up and lit behind where the trouble is, with a mark where it begins.
+private struct RideStrip: View {
+    var attributes: NextTrainAttributes
+    var trouble: NextTrainAttributes.ContentState.Trouble
+
+    private static let inset: CGFloat = 7
+    private static let lineY: CGFloat = 9
+
+    var body: some View {
+        let color = Palette.line(attributes.color) ?? Palette.accent
+        let tint = Palette.trouble(trouble)
+        let stretch = trouble.stretch
+        VStack(spacing: 3) {
+            GeometryReader { geometry in
+                let width = max(geometry.size.width - Self.inset * 2, 1)
+                let x = { (share: Double) in Self.inset + width * CGFloat(share) }
+                let from = x(stretch.lowerBound), to = max(x(stretch.upperBound), from + 10)
+                ZStack(alignment: .topLeading) {
+                    line(from: Self.inset, to: Self.inset + width).stroke(color, style: StrokeStyle(lineWidth: 5, lineCap: .round))
+                    // The troubled stretch: lit behind, and the line itself broken up.
+                    line(from: from, to: min(to, Self.inset + width)).stroke(tint.opacity(0.3), style: StrokeStyle(lineWidth: 15, lineCap: .round))
+                    line(from: from, to: min(to, Self.inset + width)).stroke(Palette.background, style: StrokeStyle(lineWidth: 5))
+                    line(from: from, to: min(to, Self.inset + width)).stroke(color, style: StrokeStyle(lineWidth: 5, dash: [7, 4]))
+                    ForEach([Self.inset, Self.inset + width], id: \.self) { end in
+                        Circle().fill(Palette.label)
+                            .overlay(Circle().strokeBorder(Palette.background, lineWidth: 2))
+                            .frame(width: 12, height: 12)
+                            .position(x: end, y: Self.lineY)
+                    }
+                    // Where it begins, when that is part-way along.
+                    if stretch.lowerBound > 0.04, stretch.lowerBound < 0.96 {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .font(.system(size: 13, weight: .bold))
+                            .symbolRenderingMode(.palette)
+                            .foregroundStyle(Palette.background, tint)
+                            .position(x: from, y: Self.lineY - 0.5)
+                    }
+                }
+            }
+            .frame(height: Self.lineY * 2)
+            HStack(spacing: 8) {
+                Text(attributes.stop).lineLimit(1)
+                Spacer(minLength: 4)
+                if let towards = attributes.towards { Text(towards).lineLimit(1) }
+            }
+            .font(.caption.weight(.semibold))
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(spoken)
+    }
+
+    private func line(from: CGFloat, to: CGFloat) -> Path {
+        Path { path in
+            path.move(to: CGPoint(x: from, y: Self.lineY))
+            path.addLine(to: CGPoint(x: to, y: Self.lineY))
+        }
+    }
+
+    private var spoken: String {
+        if let from = trouble.from, let to = trouble.to { return "Between \(from) and \(to)" }
+        return "On your ride from \(attributes.stop)"
+    }
+}
+
 /// Time to go, counting down by itself ("4:52"), and holding at 0:00; "Due" once it's under half
 /// a minute when drawn. SwiftUI's self-updating minutes only come as "13 minutes".
 private struct Minutes: View {
@@ -223,11 +363,12 @@ private struct Freshness: View {
 
 private struct NoticeLine: View {
     var text: String
+    var color = Palette.warning
 
     var body: some View {
         Label(text, systemImage: "exclamationmark.triangle.fill")
             .font(.caption.weight(.semibold))
-            .foregroundStyle(Palette.warning)
+            .foregroundStyle(color)
             .lineLimit(1)
             .frame(maxWidth: .infinity, alignment: .leading)
     }

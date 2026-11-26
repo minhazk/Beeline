@@ -1,6 +1,8 @@
 // What the app sends: the lines you use regularly and when you travel.
 // BeelineTests/Fixtures/alert-contract.json is the shared example both sides test against.
 
+import type { Section } from "./clauses.ts";
+
 export type Severity = "minor" | "delays" | "closed";
 
 export interface Station {
@@ -48,6 +50,8 @@ export interface Issue {
   line: string;
   title: string;
   detail: string;
+  /** The stretch it is on, when it was judged by one TfL names ("between X and Y"). */
+  section?: Section;
   /** For planned works: when it starts (ms). */
   from?: number;
 }

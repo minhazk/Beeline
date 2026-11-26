@@ -64,7 +64,11 @@ test("in the evening window: today's closure is pushed once, Time Sensitive", as
   assert.match(headers.authorization, /^bearer [\w-]+\.[\w-]+\.[\w-]+$/);
   const payload = JSON.parse(push.init!.body as string);
   assert.equal(payload.aps["interruption-level"], "time-sensitive");
-  assert.equal(payload.aps.alert.subtitle, "Canary Wharf closed (Elizabeth line)");
+  assert.equal(payload.aps.alert.title, "Elizabeth line");
+  assert.match(payload.aps.alert.body, /^Canary Wharf closed(\n|$)/);
+  assert.equal(payload.aps.alert.subtitle, undefined);
+  assert.equal(payload.aps["mutable-content"], 1, "so the app can draw the line's disc on it");
+  assert.deepEqual(payload.sender, { id: "line:elizabeth", name: "Elizabeth line", color: "6950A1", symbol: "train.side.front.car" });
   assert.ok(JSON.parse(db.rows.get(token)!.state).alerts[contract().alerts[0].id].open);
 
   // Two minutes later, same closure: quiet. The provider token is reused.
@@ -137,7 +141,8 @@ test("no line order from TfL: told, as before", async () => {
   const { env, requests } = await setup(200, NOTICE, 500);
   assert.deepEqual(await runChecks(env, Date.parse("2026-11-09T17:00:00Z")), { devices: 1, checked: 1, sent: 1 });
   const payload = JSON.parse(requests.find((r) => r.url.includes("push.apple.com"))!.init!.body as string);
-  assert.equal(payload.aps.alert.subtitle, "Elizabeth line: severe delays");
+  assert.equal(payload.aps.alert.title, "Elizabeth line");
+  assert.match(payload.aps.alert.body, /^Severe delays(\n|$)/);
 });
 
 test("good service, or stations listed: no line order asked for", async () => {
@@ -197,7 +202,7 @@ async function run(steps: ([string, unknown] | [string, unknown, unknown[]])[], 
     const before = requests.filter((r) => r.url.includes("push.apple.com")).length;
     await runChecks(env, time.includes("T") ? Date.parse(`${time}:00Z`) : at(time));
     const pushed = requests.filter((r) => r.url.includes("push.apple.com")).slice(before);
-    out.push(pushed.map((r) => (JSON.parse(r.init!.body as string).aps.alert.subtitle ? "issues" : "clear")).join(",") || "-");
+    out.push(pushed.map((r) => (JSON.parse(r.init!.body as string).aps["interruption-level"] === "passive" ? "clear" : "issues")).join(",") || "-");
   }
   return { out, requests };
 }
@@ -774,8 +779,11 @@ test("London-wide strikes are pushed without saved lines, once in advance and ag
   };
   const notifications = () => requests.filter(r => r.url.includes("push.apple.com")).map(r => JSON.parse(r.init!.body as string).aps);
   assert.equal((await runChecks(env, before)).sent, 3);
-  assert.deepEqual(notifications().map(n => n.alert.title), ["Strike disruption · London buses", "Upcoming strike · Tube", "Upcoming strike · National Rail"]);
-  assert.match(notifications()[1].alert.body, /26 Nov.*12:00/);
+  assert.deepEqual(notifications().map(n => n.alert), [
+    { title: "\u26A0\uFE0F Strike now", body: "London buses · Route 25" },
+    { title: "\u{1F4C5} Tube strike", body: "Thu 26 Nov · 12:00 · 24h\nCentral, Circle" },
+    { title: "\u{1F4C5} National Rail strike", body: "Fri 27 Nov · 12:00 · 24h\nSoutheastern" },
+  ]);
   assert.equal(notifications()[1]["interruption-level"], "active");
   assert.equal((await runChecks(env, before + 120_000)).sent, 0);
 
@@ -784,9 +792,8 @@ test("London-wide strikes are pushed without saved lines, once in advance and ag
   forecastDown = true;
   assert.equal((await runChecks(env, start)).sent, 1, "live checks still work when the forecast fails");
   const current = notifications().at(-1);
-  assert.equal(current.alert.title, "Strike disruption · Tube");
+  assert.deepEqual(current.alert, { title: "\u26A0\uFE0F Strike now", body: "Tube · Central, Circle" });
   assert.equal(current["interruption-level"], "time-sensitive");
-  assert.match(current.alert.body, /Central, Circle/);
   assert.equal((await runChecks(env, start + 120_000)).sent, 0);
 
   await db.prepare("UPDATE devices SET strike_alerts = 0").run();
@@ -828,11 +835,11 @@ test("coinciding bus operator strikes each reach the phone across dated batches,
   const start = Date.parse("2026-11-26T12:00:00Z");
   for (let i = 0; i < 4; i++) await runChecks(env, start + i * 120_000);
   const pushes = requests.filter(r => r.url.includes("push.apple.com")).map(r => JSON.parse(r.init!.body as string).aps.alert.body);
-  assert.equal(pushes.length, 2);
-  for (const operator of ["North", "West"]) assert.equal(pushes.filter(p => p.includes(operator)).length, 1);
+  // Each says when and which routes: North's first batch had route 100, West's is 121.
+  assert.deepEqual(pushes, ["Wed 2 Dec · 00:00 · 24h\nRoute 100", "Wed 2 Dec · 00:00 · 24h\nRoute 121"]);
 });
 
-test("each published strike period gets its own reminder and start push with the app closed", async () => {
+test("published strike periods are announced together, then each gets its own reminder and start push with the app closed", async () => {
   const { env, db, requests } = await setup(200, [], "fixture", []);
   await db.prepare("UPDATE devices SET strike_alerts = 1").run();
   const recorded = globalThis.fetch;
@@ -864,24 +871,27 @@ test("each published strike period gets its own reminder and start push with the
     const payloads = pushes.map(r => JSON.parse(r.init!.body as string));
     assert.deepEqual(payloads.map(p => p.aps.alert.title), titles, iso);
     assert.ok(payloads.every(p => p.alert === "london-strikes"));
-    return pushes.map(r => (r.init!.headers as Record<string, string>)["apns-collapse-id"]);
+    return Object.assign(pushes.map(r => (r.init!.headers as Record<string, string>)["apns-collapse-id"]), { bodies: payloads.map(p => p.aps.alert.body as string) });
   }
 
-  await check("2026-12-01T10:00:00Z", ["Upcoming strike · Tube", "Upcoming strike · Tube"]);
+  const announced_ = await check("2026-12-01T10:00:00Z", ["\u{1F4C5} Tube strike"]);
+  assert.deepEqual(announced_.bodies, ["17 + 19 Dec · 12:00 · 24h each"]);
+  await check("2026-12-01T10:02:00Z", []);
   apiListsFirst = true;
   await check("2026-12-16T11:58:00Z", []);
-  const first = await check("2026-12-16T12:00:00Z", ["Strike reminder · Tube"]);
+  const first = await check("2026-12-16T12:00:00Z", ["\u{1F4C5} Tube strike tomorrow"]);
+  assert.deepEqual(first.bodies, ["Thu 17 Dec · 12:00 · 24h"]);
   await check("2026-12-16T12:02:00Z", []);
-  await check("2026-12-17T12:00:00Z", ["Strike disruption · Tube"]);
+  await check("2026-12-17T12:00:00Z", ["\u26A0\uFE0F Strike now"]);
   apiListsFirst = false;
 
   // The second period was pulled from the calendar. No reminder until TfL reinstates it.
   announced = [dates[0]];
   await check("2026-12-18T12:00:00Z", []);
   announced = dates;
-  const second = await check("2026-12-18T15:12:00Z", ["Strike reminder · Tube"]);
+  const second = await check("2026-12-18T15:12:00Z", ["\u{1F4C5} Tube strike tomorrow"]);
   assert.notEqual(first[0], second[0]);
   await check("2026-12-18T15:14:00Z", []);
-  await check("2026-12-19T12:00:00Z", ["Strike disruption · Tube"]);
+  await check("2026-12-19T12:00:00Z", ["\u26A0\uFE0F Strike now"]);
   await check("2026-12-19T12:02:00Z", []);
 });

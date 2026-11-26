@@ -12,6 +12,9 @@ struct NextTrainAttributes: ActivityAttributes {
         var trains: [Train]
         /// Trouble on the way, in a few words: "Severe delays".
         var notice: String?
+        /// That trouble drawn: where on your ride it is, and why. Only the server says it; without
+        /// it the notice shows as a line under the trains.
+        var trouble: Trouble?
         /// When these times were worked out, seconds since 1970.
         var updated: Double
         /// Live estimates (TfL's), rather than the timetable.
@@ -25,6 +28,35 @@ struct NextTrainAttributes: ActivityAttributes {
             var late: Int?
 
             var date: Date { Date(timeIntervalSince1970: at) }
+        }
+
+        struct Trouble: Codable, Hashable {
+            /// "minor", "delays" or "closed", as the alerts server grades it.
+            var severity: String
+            /// The ends of the stretch TfL names: "Leytonstone", "Hainault".
+            var from: String?
+            var to: String?
+            /// "Signal failure at Leytonstone".
+            var cause: String?
+            /// Where it is on your ride, as shares of the way from where you board to where you get
+            /// off: [0.4, 1] is the last three fifths. Nil is the whole ride.
+            var span: [Double]?
+
+            /// The part of the ride it covers, in order and within the ride; the whole of it when
+            /// the server didn't say, or said something that isn't a stretch.
+            var stretch: ClosedRange<Double> {
+                guard let span, span.count == 2, span.allSatisfy({ $0.isFinite }) else { return 0...1 }
+                let a = min(max(min(span[0], span[1]), 0), 1), b = min(max(max(span[0], span[1]), 0), 1)
+                return a...b
+            }
+
+            /// For where there's room for one word: "Severe", "Minor", "Closed", "Delays".
+            func word(for notice: String?) -> String {
+                let said = notice?.lowercased() ?? ""
+                if said.contains("severe") { return "Severe" }
+                if said.contains("minor") || severity == "minor" { return "Minor" }
+                return severity == "closed" ? "Closed" : "Delays"
+            }
         }
 
         /// The trains still to leave at `now` (one leaving this moment counts), soonest first.
